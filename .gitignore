@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+evidence/source/
+.env
+.env.*
+!.env.example
