@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0d3453" />
+    <meta name="description" content="像素方块收集挑战，网页复刻研究版。" />
+    <title>像素方块 · 收集挑战</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="game-shell" aria-label="像素方块游戏">
+      <canvas id="game-canvas" width="597" height="1296" aria-label="拖动收集槽收集彩色像素方块"></canvas>
+      <button id="settings-button" class="settings-button" type="button" aria-label="打开设置"></button>
+      <div id="booster-controls" class="booster-controls" role="group" hidden aria-label="道具栏">
+        <button type="button" data-booster="freeze" aria-label="使用时间冻结道具">
+          <span class="booster-icon" aria-hidden="true">❄</span><span class="booster-count" aria-hidden="true">2</span><span class="booster-lock" aria-hidden="true">第 7 关</span>
+        </button>
+        <button type="button" data-booster="hammer" aria-label="使用拆分锤">
+          <span class="booster-icon" aria-hidden="true">🔨</span><span class="booster-count" aria-hidden="true">2</span><span class="booster-lock" aria-hidden="true">第 9 关</span>
+        </button>
+        <button type="button" data-booster="ufo" aria-label="使用飞碟道具">
+          <span class="booster-icon" aria-hidden="true">🛸</span><span class="booster-count" aria-hidden="true">2</span><span class="booster-lock" aria-hidden="true">第 13 关</span>
+        </button>
+        <button type="button" data-booster="locked" aria-label="达到第 16 关解锁" disabled>
+          <span class="booster-icon" aria-hidden="true">🔒</span><span class="booster-count" aria-hidden="true" hidden></span><span class="booster-lock" aria-hidden="true">第 16 关</span>
+        </button>
+      </div>
+      <div id="dialog-layer" class="dialog-layer" hidden></div>
+      <p id="live-status" class="visually-hidden" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

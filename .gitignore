@@ -8,3 +8,5 @@ evidence/source/
 .env
 .env.*
 !.env.example
+
+.research/

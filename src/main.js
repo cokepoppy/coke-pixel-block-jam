@@ -1,0 +1,2651 @@
+import {
+  SCREEN,
+  collectAlongPath,
+  createGameState,
+  fillBucket,
+  formatClock,
+  getBucket,
+  getBucketAt,
+  getProgress,
+  startNextLevel,
+  splitCellAt,
+  updateClock,
+} from './game.js';
+import { AudioEngine } from './audio.js';
+
+const canvas = document.querySelector('#game-canvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+const settingsButton = document.querySelector('#settings-button');
+const dialogLayer = document.querySelector('#dialog-layer');
+const liveStatus = document.querySelector('#live-status');
+const boosterControls = document.querySelector('#booster-controls');
+const audio = new AudioEngine();
+const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const query = new URLSearchParams(location.search);
+const requestedPreviewLevel = Number(query.get('previewLevel'));
+const hasPreviewLevel = Number.isInteger(requestedPreviewLevel) && requestedPreviewLevel >= 1 && requestedPreviewLevel <= 13;
+const requestedPreviewReward = query.get('previewReward') === '1';
+const requestedSplashPreview = query.get('previewSplash') === '1';
+const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
+
+const COLORS_3D = {
+  green: { light: '#a9ff75', mid: '#43e531', dark: '#138b28', deep: '#064c1d' },
+  yellow: { light: '#fff581', mid: '#f7f438', dark: '#d89905', deep: '#775000' },
+  red: { light: '#ff7468', mid: '#d32222', dark: '#99151e', deep: '#530b18' },
+  blue: { light: '#8ce7ff', mid: '#20b9ff', dark: '#0873be', deep: '#063b6b' },
+  purple: { light: '#777aff', mid: '#302bd0', dark: '#1c20a8', deep: '#10155f' },
+  magenta: { light: '#ffc0d0', mid: '#f078a7', dark: '#c54667', deep: '#7e2b43' },
+  white: { light: '#ffffff', mid: '#f0f2f7', dark: '#aebbc2', deep: '#58656d' },
+  brown: { light: '#d99065', mid: '#7d2c28', dark: '#5f281e', deep: '#321411' },
+  orange: { light: '#ffb071', mid: '#ee673c', dark: '#b9431d', deep: '#5e1c12' },
+};
+
+const LEVEL_ONE_PILE_THEMES = {
+  yellow: { light: '#fff000', mid: '#f2cf08', dark: '#a98706', deep: '#5b4200' },
+};
+
+// Level 3 cell faces sampled from the supplied recording at 00:19.9, after
+// scaling its 1206 x 2622 frame to the 597 x 1296 game viewport.
+const LEVEL_PIXEL_THEMES = {
+  3: {
+    yellow: { light: '#fff63c', mid: '#fcee2e', dark: '#d9b719', deep: '#977500' },
+    blue: { light: '#70d7ff', mid: '#4eb7fa', dark: '#176db4', deep: '#0756b4' },
+    purple: { light: '#575eff', mid: '#3d44fb', dark: '#2327ad', deep: '#202399' },
+  },
+  // Level 8 hues calibrated from cell-center samples at source time 00:02:54.83.
+  8: {
+    orange: { light: '#ec6239', mid: '#e05a32', dark: '#b74620', deep: '#672314' },
+    magenta: { light: '#e522ec', mid: '#dd1fe0', dark: '#ad17a7', deep: '#650e68' },
+    yellow: { light: '#f9f53d', mid: '#ede935', dark: '#c2ac17', deep: '#655709' },
+  },
+};
+
+const state = {
+  game: createGameState(initialLevel),
+  loading: requestedSplashPreview || !hasPreviewLevel,
+  loadingPreview: requestedSplashPreview,
+  loadingStartedAt: performance.now(),
+  lastFrameAt: performance.now(),
+  dragging: false,
+  lastPoint: null,
+  dragOrigin: null,
+  dragOffset: null,
+  dragDistance: 0,
+  moveCollected: 0,
+  particleSerial: 0,
+  lastStatus: initialLevel === 1 ? 'tutorial' : 'playing',
+  settingsReturnStatus: initialLevel === 1 ? 'tutorial' : 'playing',
+  endDialogShown: false,
+  hammerMode: false,
+  ufoMode: false,
+  freezeCharges: 2,
+  hammerCharges: 2,
+  ufoCharges: 2,
+  ufoFlight: null,
+  introReturnStatus: 'playing',
+  transitionTimer: null,
+  levelOneSourceTimeline: null,
+  levelOneWonPending: false,
+};
+const levelPixelTileCache = new Map();
+const voxelSpriteCache = new Map();
+const levelOneBoardImage = new Image();
+levelOneBoardImage.src = '/assets/level1/level1-board.png';
+const levelOneSettingsGearImage = new Image();
+levelOneSettingsGearImage.src = '/assets/level1/level1-settings-gear.png';
+const levelOneOpeningPanelImage = new Image();
+levelOneOpeningPanelImage.src = '/assets/level1/level1-opening-panel.png';
+const levelOneTutorialVideo = document.createElement('video');
+levelOneTutorialVideo.id = 'level-one-tutorial-video';
+levelOneTutorialVideo.src = '/assets/level1/level1-tutorial-hand.mp4';
+levelOneTutorialVideo.preload = 'auto';
+levelOneTutorialVideo.playsInline = true;
+levelOneTutorialVideo.muted = true;
+levelOneTutorialVideo.loop = true;
+levelOneTutorialVideo.disablePictureInPicture = true;
+levelOneTutorialVideo.setAttribute('aria-hidden', 'true');
+levelOneTutorialVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+const levelOneSourceVideo = document.createElement('video');
+levelOneSourceVideo.id = 'level-one-source-video';
+levelOneSourceVideo.src = '/assets/level1/level1-source-animation.mp4';
+levelOneSourceVideo.preload = 'auto';
+levelOneSourceVideo.playsInline = true;
+levelOneSourceVideo.muted = true;
+levelOneSourceVideo.disablePictureInPicture = true;
+levelOneSourceVideo.setAttribute('aria-hidden', 'true');
+levelOneSourceVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneTutorialVideo, levelOneSourceVideo);
+const levelOneSourceAudio = document.createElement('audio');
+levelOneSourceAudio.id = 'level-one-source-audio';
+levelOneSourceAudio.src = '/assets/level1/level1-source-audio.m4a';
+levelOneSourceAudio.preload = 'auto';
+levelOneSourceAudio.setAttribute('aria-hidden', 'true');
+levelOneSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneSourceAudio);
+const LEVEL_ONE_SOURCE_KEYFRAMES = [
+  ['yellow-6', 'yellow', 6], ['yellow-36', 'yellow', 36], ['yellow-63', 'yellow', 63],
+  ['yellow-99', 'yellow', 99], ['yellow-100', 'yellow', 100],
+  ['green-25', 'green', 25], ['green-48', 'green', 48], ['green-71', 'green', 71],
+  ['green-85', 'green', 85], ['green-99', 'green', 99], ['green-100', 'green', 100],
+  ['red-3', 'red', 3], ['red-6', 'red', 6], ['red-69', 'red', 69], ['red-72', 'red', 72],
+  ['red-77', 'red', 77], ['red-82', 'red', 82], ['red-86', 'red', 86], ['red-92', 'red', 92],
+  ['red-96', 'red', 96], ['red-100', 'red', 100],
+];
+const levelOneSourceKeyframes = LEVEL_ONE_SOURCE_KEYFRAMES.map(([name, color, progress]) => {
+  const image = new Image();
+  image.src = `/assets/level1/keyframes/${name}.webp`;
+  return { image, color, progress };
+});
+const levelOneSourcePanelCanvas = document.createElement('canvas');
+levelOneSourcePanelCanvas.width = 563;
+levelOneSourcePanelCanvas.height = 756;
+const levelOneSourcePanelContext = levelOneSourcePanelCanvas.getContext('2d');
+const levelOneYellowPileImage = new Image();
+levelOneYellowPileImage.src = '/assets/level1/level1-yellow-pile-100.png';
+const levelTwoBoardImage = new Image();
+levelTwoBoardImage.src = '/assets/level2/level2-board.png';
+const levelTwoOpeningPanelImage = new Image();
+levelTwoOpeningPanelImage.src = '/assets/level2/level2-opening-panel.png';
+const levelThreeBoardImage = new Image();
+levelThreeBoardImage.src = '/assets/level3/level3-board.png';
+const levelFourBoardCellsImage = new Image();
+levelFourBoardCellsImage.src = '/assets/level4/level4-board-cells.png';
+const levelFiveBoardImage = new Image();
+levelFiveBoardImage.src = '/assets/level5/level5-board.png';
+const levelSixBoardImage = new Image();
+levelSixBoardImage.src = '/assets/level6/level6-board.png';
+const levelSevenBoardImage = new Image();
+levelSevenBoardImage.src = '/assets/level7/level7-board.png';
+const levelNineBoardImage = new Image();
+levelNineBoardImage.src = '/assets/level9/level9-board.png';
+const levelTwelveBoardImage = new Image();
+levelTwelveBoardImage.src = '/assets/level12/level12-board.png';
+const levelThirteenBoardImage = new Image();
+levelThirteenBoardImage.src = '/assets/level13/level13-board.png';
+const levelOnePadCellImages = Array.from({ length: 4 }, (_, index) => {
+  const image = new Image();
+  image.src = `/assets/level1/level1-pad-cell-${index + 1}.png`;
+  return image;
+});
+const levelEightBoardImage = new Image();
+levelEightBoardImage.src = '/assets/level8/level8-board.png';
+const levelTenBoardImage = new Image();
+levelTenBoardImage.src = '/assets/level10/level10-board.png';
+const levelTenEmptyTileImage = new Image();
+levelTenEmptyTileImage.src = '/assets/level10/level10-empty-tile.png';
+const levelTenPadImage = new Image();
+levelTenPadImage.src = '/assets/level10/level10-pad-row.png';
+const levelTenPipeImages = Array.from({ length: 3 }, (_, index) => {
+  const image = new Image();
+  image.src = `/assets/level10/level10-pipe-${index + 1}-top.png`;
+  return image;
+});
+const levelTenBucketConfigs = createGameState(10).config.buckets;
+const levelTenBucketOrigins = new Map(levelTenBucketConfigs.map((bucket) => [
+  bucket.id,
+  { x: bucket.x, y: bucket.y },
+]));
+const levelTenBucketImages = new Map(levelTenBucketConfigs
+  .filter(({ y, height }) => y + height <= 900)
+  .map(({ id: bucketId }) => {
+  const image = new Image();
+  image.src = `/assets/level10/level10-bucket-${bucketId}.png`;
+  return [bucketId, image];
+  }));
+const levelElevenBoardImages = Object.fromEntries(['upper', 'lower'].map((boardId) => {
+  const image = new Image();
+  image.src = `/assets/level11/level11-${boardId}-board.png`;
+  return [boardId, image];
+}));
+const levelEightTileImages = Object.fromEntries(['orange', 'magenta', 'yellow'].map((color) => {
+  const image = new Image();
+  image.src = `/assets/level8/level8-${color}.png`;
+  return [color, image];
+}));
+
+function roundedRect(x, y, width, height, radius) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+}
+
+function fillRounded(x, y, width, height, radius, fill) {
+  roundedRect(x, y, width, height, radius);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function gradient(x1, y1, x2, y2, stops) {
+  const value = ctx.createLinearGradient(x1, y1, x2, y2);
+  for (const [position, color] of stops) value.addColorStop(position, color);
+  return value;
+}
+
+function drawBackground() {
+  ctx.fillStyle = gradient(0, 0, 0, SCREEN.height, [
+    [0, '#7cccf1'], [0.3, '#92d9f4'], [0.7, '#86d1ef'], [1, '#71c3e9'],
+  ]);
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+
+  const glow = ctx.createRadialGradient(300, 585, 40, 300, 585, 790);
+  glow.addColorStop(0, '#e1f9ff66');
+  glow.addColorStop(1, '#79c8ef00');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+}
+
+function loadingVoxel(cx, cy, size, color, rotation = 0, shadow = true, paletteOverride = null) {
+  const pixelSize = Math.max(3, Math.round(size));
+  const palette = paletteOverride ?? COLORS_3D[color] ?? COLORS_3D.yellow;
+  const paletteKey = `${palette.light}:${palette.mid}:${palette.dark}:${palette.deep}`;
+  const cacheKey = `${color}:${pixelSize}:${shadow ? 'shadow' : 'flat'}:${paletteKey}`;
+  let sprite = voxelSpriteCache.get(cacheKey);
+  if (!sprite) {
+    const half = pixelSize / 2;
+    const depth = pixelSize * 0.28;
+    const padding = shadow ? Math.ceil(pixelSize * 0.5) : 1;
+    const surface = document.createElement('canvas');
+    surface.width = Math.ceil(pixelSize + padding * 2);
+    surface.height = Math.ceil(pixelSize * 1.08 + padding * 2);
+    const surfaceContext = surface.getContext('2d');
+    surfaceContext.translate(padding + half, padding + depth);
+    if (shadow) {
+      surfaceContext.shadowColor = '#062c6688';
+      surfaceContext.shadowBlur = pixelSize * 0.16;
+      surfaceContext.shadowOffsetY = pixelSize * 0.13;
+    }
+
+    surfaceContext.beginPath();
+    surfaceContext.moveTo(-half, 0);
+    surfaceContext.lineTo(0, -depth);
+    surfaceContext.lineTo(half, 0);
+    surfaceContext.lineTo(0, depth);
+    surfaceContext.closePath();
+    const top = surfaceContext.createLinearGradient(0, -depth, 0, depth);
+    top.addColorStop(0, palette.light);
+    top.addColorStop(0.55, palette.mid);
+    top.addColorStop(1, palette.dark);
+    surfaceContext.fillStyle = top;
+    surfaceContext.fill();
+
+    surfaceContext.beginPath();
+    surfaceContext.moveTo(-half, 0);
+    surfaceContext.lineTo(0, depth);
+    surfaceContext.lineTo(0, depth + pixelSize * 0.52);
+    surfaceContext.lineTo(-half, pixelSize * 0.52);
+    surfaceContext.closePath();
+    const left = surfaceContext.createLinearGradient(-half, 0, 0, 0);
+    left.addColorStop(0, palette.mid);
+    left.addColorStop(1, palette.dark);
+    surfaceContext.fillStyle = left;
+    surfaceContext.fill();
+
+    surfaceContext.beginPath();
+    surfaceContext.moveTo(0, depth);
+    surfaceContext.lineTo(half, 0);
+    surfaceContext.lineTo(half, pixelSize * 0.52);
+    surfaceContext.lineTo(0, depth + pixelSize * 0.52);
+    surfaceContext.closePath();
+    const right = surfaceContext.createLinearGradient(0, depth, half, depth);
+    right.addColorStop(0, palette.mid);
+    right.addColorStop(1, palette.deep);
+    surfaceContext.fillStyle = right;
+    surfaceContext.fill();
+
+    sprite = {
+      surface,
+      x: -half - padding,
+      y: -depth - padding,
+    };
+    voxelSpriteCache.set(cacheKey, sprite);
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.drawImage(sprite.surface, sprite.x, sprite.y);
+  ctx.restore();
+}
+
+function drawLoadingLogo() {
+  const cx = SCREEN.width / 2;
+  const cy = 245;
+  ctx.save();
+  ctx.shadowColor = '#001e4b99';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 114, 118, 0, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(cx - 100, cy - 112, cx + 100, cy + 116, [
+    [0, '#c5e9ff'], [0.18, '#435d7c'], [0.75, '#263e60'], [1, '#d3eaff'],
+  ]);
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#b7d9ef';
+  ctx.stroke();
+  ctx.restore();
+
+  const logoText = (text, y, size, fill, outline, width = 8) => {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `1000 ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = width;
+    ctx.strokeStyle = '#321d2a';
+    ctx.shadowColor = '#071b36';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 9;
+    ctx.strokeText(text, cx, y + 5);
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = outline;
+    ctx.strokeText(text, cx, y);
+    ctx.fillStyle = fill;
+    ctx.fillText(text, cx, y);
+    ctx.restore();
+  };
+  logoText('像素', 203, 60, '#76f125', '#155b31', 9);
+  logoText('方块', 266, 58, '#ff4834', '#7f241d', 9);
+  logoText('大闯关', 329, 48, '#fff4d8', '#a64016', 8);
+  loadingVoxel(194, 200, 50, 'magenta', -0.16);
+  loadingVoxel(402, 272, 51, 'green', 0.1);
+  loadingVoxel(158, 302, 54, 'blue', -0.12);
+}
+
+function drawLoadingBox(now) {
+  const shimmer = prefersReducedMotion.matches ? 0 : Math.sin(now / 380) * 2;
+  const left = 190;
+  const right = 407;
+  const top = 742 + shimmer;
+  const frontBottom = 895;
+  ctx.save();
+  ctx.shadowColor = '#032b6388';
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 16;
+  ctx.beginPath();
+  ctx.moveTo(left, top);
+  ctx.lineTo(298, top - 36);
+  ctx.lineTo(right, top);
+  ctx.lineTo(298, top + 44);
+  ctx.closePath();
+  ctx.fillStyle = gradient(0, top - 36, 0, top + 44, [[0, '#fff46a'], [0.55, '#ffc600'], [1, '#c98705']]);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.moveTo(left, top);
+  ctx.lineTo(298, top + 44);
+  ctx.lineTo(298, frontBottom);
+  ctx.lineTo(left + 10, frontBottom - 28);
+  ctx.closePath();
+  ctx.fillStyle = gradient(left, top, 298, top, [[0, '#ffcd16'], [0.55, '#f8a900'], [1, '#d78600']]);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(298, top + 44);
+  ctx.lineTo(right, top);
+  ctx.lineTo(right - 6, frontBottom - 28);
+  ctx.lineTo(298, frontBottom);
+  ctx.closePath();
+  ctx.fillStyle = gradient(298, top, right, top, [[0, '#f8b700'], [0.55, '#e79b00'], [1, '#ba7100']]);
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#ffe95c';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(left + 9, top + 8);
+  ctx.lineTo(298, top + 50);
+  ctx.lineTo(right - 8, top + 8);
+  ctx.strokeStyle = '#fff47b';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  const colors = ['blue', 'orange', 'red', 'green', 'magenta', 'purple', 'yellow'];
+  const cubes = [
+    [242, 707, 24], [274, 690, 27], [305, 704, 25], [337, 696, 26], [365, 714, 23],
+    [222, 728, 22], [255, 730, 24], [287, 722, 23], [320, 730, 25], [351, 735, 22], [383, 729, 23],
+    [230, 760, 22], [270, 767, 22], [306, 762, 22], [342, 767, 21], [375, 758, 21],
+    [167, 827, 24], [180, 854, 22], [426, 842, 24], [443, 870, 23], [226, 916, 25], [321, 924, 24], [370, 902, 24],
+  ];
+  cubes.forEach(([x, y, size], index) => loadingVoxel(x, y, size, colors[index % colors.length], ((index % 3) - 1) * 0.07));
+}
+
+function drawLoadingScreen(now) {
+  ctx.fillStyle = gradient(0, 0, 0, SCREEN.height, [[0, '#0a3e83'], [0.5, '#0873c1'], [1, '#06386f']]);
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+  const glow = ctx.createRadialGradient(298, 772, 22, 298, 772, 540);
+  glow.addColorStop(0, '#42d6ffbb');
+  glow.addColorStop(0.45, '#1f9de77a');
+  glow.addColorStop(1, '#0b4f9c00');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+  drawLoadingLogo();
+  drawLoadingBox(now);
+
+  const progress = state.loadingPreview ? 0.72 : Math.min(0.94, 0.18 + (now - state.loadingStartedAt) / 1800 * 0.72);
+  ctx.save();
+  ctx.shadowColor = '#062d5faa';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 5;
+  roundedRect(105, 1094, 382, 34, 17);
+  ctx.fillStyle = gradient(0, 1094, 0, 1128, [[0, '#fff1a0'], [0.5, '#f6bf23'], [1, '#c47b03']]);
+  ctx.fill();
+  ctx.restore();
+  roundedRect(112, 1101, 368, 20, 10);
+  ctx.fillStyle = '#7b4d11';
+  ctx.fill();
+  roundedRect(115, 1104, 362 * progress, 14, 7);
+  ctx.fillStyle = gradient(0, 1104, 0, 1118, [[0, '#fff379'], [1, '#ffb819']]);
+  ctx.fill();
+  loadingVoxel(463, 1096, 44, 'yellow');
+  drawText('☺', 463, 1108, { size: 24, stroke: '#9e5b00', lineWidth: 2, shadow: '#9b5b00', shadowY: 1 });
+  drawText('正在加载游戏…', 298, 1057, { size: 24, stroke: '#17243a', lineWidth: 4, shadow: '#071a37', shadowY: 2 });
+}
+
+function drawText(text, x, y, options = {}) {
+  const {
+    size = 32,
+    weight = 900,
+    fill = '#fff',
+    stroke = '#25245a',
+    lineWidth = 5,
+    align = 'left',
+    shadow = '#182850',
+    shadowBlur = 2,
+    shadowY = 3,
+  } = options;
+  ctx.save();
+  ctx.textAlign = align;
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `${weight} ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = stroke;
+  ctx.shadowColor = shadow;
+  ctx.shadowBlur = shadowBlur;
+  ctx.shadowOffsetY = shadowY;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function drawGear(cx, cy) {
+  ctx.save();
+  ctx.shadowColor = '#214f7f88';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 4;
+  const outer = ctx.createRadialGradient(cx - 8, cy - 12, 3, cx, cy, 34);
+  outer.addColorStop(0, '#7189ad');
+  outer.addColorStop(0.5, '#40577f');
+  outer.addColorStop(1, '#28365f');
+  ctx.beginPath();
+  ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+  ctx.fillStyle = outer;
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#8fa8c7';
+  ctx.stroke();
+  ctx.shadowColor = 'transparent';
+
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (Math.PI * 2 * i) / 8;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    fillRounded(-4.5, -22, 9, 15, 2, '#d8dce0');
+    ctx.restore();
+  }
+  ctx.beginPath();
+  ctx.arc(cx, cy, 15, 0, Math.PI * 2);
+  ctx.fillStyle = '#d8dce0';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#566780';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#536783';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHeader() {
+  drawText(`第${state.game.level}关`, 43, 98, {
+    size: state.game.level === 1 ? 28 : 34, fill: '#fff', stroke: '#262452', lineWidth: 6, shadow: '#34305c', shadowY: 2,
+  });
+
+  ctx.save();
+  ctx.shadowColor = '#1c385e88';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 6;
+  roundedRect(206, 48, 184, 70, 34);
+  ctx.fillStyle = gradient(0, 48, 0, 118, [[0, '#324779'], [0.25, '#536b9e'], [1, '#384d7b']]);
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#b9e5f1';
+  ctx.stroke();
+  ctx.restore();
+  drawText(formatClock(state.game.timeRemaining), 298, 98, {
+    size: 42, fill: '#fff', stroke: '#2c2942', lineWidth: 7, shadow: '#241f34', shadowY: 3,
+  });
+  if (state.game.level === 1 && levelOneSettingsGearImage.complete && levelOneSettingsGearImage.naturalWidth > 0) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelOneSettingsGearImage, 490, 56);
+    ctx.restore();
+  } else {
+    drawGear(523, 86);
+  }
+}
+
+function drawFramePanel(frame, wall) {
+  const { x, y, width, height } = frame;
+  const wallBottom = wall.y + wall.height;
+  ctx.save();
+  ctx.shadowColor = '#2d617e66';
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetY = 13;
+  roundedRect(x, y, width, height, 60);
+  ctx.fillStyle = gradient(0, y, 0, y + height, [
+    [0, '#ecfdff'], [0.2, '#a4ddf0'], [0.55, '#76bfe0'], [1, '#4f91b8'],
+  ]);
+  ctx.fill();
+  ctx.restore();
+
+  roundedRect(x + 8, y + 7, width - 17, height - 20, 54);
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#f5ffff';
+  ctx.stroke();
+  ctx.fillStyle = gradient(0, y + 14, 0, y + height - 14, [
+    [0, '#cdefff'], [0.36, '#a7d8ef'], [0.69, '#74b6da'], [1, '#90d1ea'],
+  ]);
+  ctx.fill();
+
+  roundedRect(wall.x, wall.y, wall.width, wall.height, 43);
+  ctx.fillStyle = gradient(0, wall.y, 0, wallBottom, [[0, '#9ed5ee'], [0.66, '#8bc9e5'], [1, '#56a3ce']]);
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#eafaff';
+  ctx.stroke();
+
+  roundedRect(x + 25, wallBottom + 1, width - 50, Math.max(30, y + height - wallBottom - 26), 31);
+  ctx.fillStyle = gradient(0, wallBottom + 1, 0, y + height - 25, [[0, '#4f9bc7'], [0.18, '#84c3e0'], [1, '#4992be']]);
+  ctx.fill();
+
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  roundedRect(x + 14, y + 9, width - 28, height - 34, 45);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawGameFrame() {
+  const config = state.game.config;
+  if (config.panels) {
+    for (const panel of config.panels) drawFramePanel(panel.frame, panel.wall);
+    return;
+  }
+  drawFramePanel(config.frame, config.wall);
+}
+
+function pixelTheme(color) {
+  return LEVEL_PIXEL_THEMES[state.game.level]?.[color] ?? COLORS_3D[color];
+}
+
+function pixelPalette(color, x, y, height) {
+  const theme = pixelTheme(color);
+  return gradient(x, y, x, y + height, [[0, theme.light], [0.22, theme.mid], [0.8, theme.mid], [1, theme.dark]]);
+}
+
+function getLevelThreePixelTile(color) {
+  const cacheKey = `${state.game.level}:${color}`;
+  if (levelPixelTileCache.has(cacheKey)) return levelPixelTileCache.get(cacheKey);
+  const theme = pixelTheme(color);
+  const tile = document.createElement('canvas');
+  tile.width = 40;
+  tile.height = 40;
+  const tileContext = tile.getContext('2d');
+  tileContext.fillStyle = theme.deep;
+  tileContext.fillRect(0, 0, tile.width, tile.height);
+  const inset = 4;
+  const face = tileContext.createLinearGradient(inset, 0, tile.width - inset, 0);
+  face.addColorStop(0, theme.mid);
+  face.addColorStop(0.42, theme.mid);
+  face.addColorStop(0.86, theme.light);
+  face.addColorStop(1, theme.dark);
+  tileContext.fillStyle = face;
+  tileContext.fillRect(inset, inset, tile.width - inset * 2, tile.height - inset * 2);
+
+  const top = tileContext.createLinearGradient(inset, 0, tile.width - inset, 0);
+  top.addColorStop(0, theme.mid);
+  top.addColorStop(0.5, theme.light);
+  top.addColorStop(1, theme.light);
+  tileContext.fillStyle = top;
+  tileContext.fillRect(inset, inset, tile.width - inset * 2, 2);
+  tileContext.fillStyle = `${theme.dark}aa`;
+  tileContext.fillRect(inset, tile.height - inset - 2, tile.width - inset * 2, 2);
+  tileContext.fillStyle = `${theme.light}55`;
+  tileContext.fillRect(inset, inset, 1, tile.height - inset * 2);
+  levelPixelTileCache.set(cacheKey, tile);
+  return tile;
+}
+
+function drawPixelCell(x, y, width, height, color, serial) {
+  const theme = pixelTheme(color);
+  if (state.game.level === 8) {
+    const sourceTile = levelEightTileImages[color];
+    if (sourceTile?.complete && sourceTile.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(sourceTile, x, y, width, height);
+      ctx.restore();
+      return;
+    }
+  }
+  if (state.game.level === 3) {
+    // Cache each source-like beveled tile and level palette once; the board
+    // redraws every animation frame and contains over a thousand cells.
+    ctx.drawImage(getLevelThreePixelTile(color), x, y, width, height);
+    return;
+  }
+
+  const inset = 0.65;
+  ctx.fillStyle = theme.deep;
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = pixelPalette(color, x, y, height);
+  ctx.fillRect(x + inset, y + inset, width - inset * 1.5, height - inset * 1.5);
+
+  ctx.beginPath();
+  ctx.moveTo(x + 1, y + height - 1);
+  ctx.lineTo(x + 1, y + 1);
+  ctx.lineTo(x + width - 1, y + 1);
+  ctx.strokeStyle = serial % 4 === 0 ? '#ffffff78' : '#ffffff45';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x + 1, y + height - 1);
+  ctx.lineTo(x + width - 1, y + height - 1);
+  ctx.lineTo(x + width - 1, y + 1);
+  ctx.strokeStyle = `${theme.dark}aa`;
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+}
+
+function boardMatchesSourceLayout(board) {
+  const paint = state.game.config.paint;
+  if (typeof paint !== 'function') return false;
+  const { cols, rows } = board.rect;
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < cols; column += 1) {
+      const sourceCell = paint(column, row);
+      const currentCell = state.game.grid[board.cellOffset + row * cols + column];
+      if (Boolean(sourceCell) !== Boolean(currentCell)) return false;
+      if (sourceCell && (currentCell.color !== sourceCell.color
+        || currentCell.targetBucketId !== sourceCell.targetBucketId
+        || currentCell.split)) return false;
+    }
+  }
+  return true;
+}
+
+function drawPixelWall() {
+  for (const board of state.game.grids) {
+    const { x, y, width, height, cols, rows } = board.rect;
+    if (state.game.level === 1 && levelOneBoardImage.complete && levelOneBoardImage.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelOneBoardImage, x, y, width, height);
+      ctx.restore();
+
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellRight = x + Math.round((column + 1) * width / cols);
+          const cellBottom = y + Math.round((row + 1) * height / rows);
+          const cellWidth = cellRight - px;
+          const cellHeight = cellBottom - py;
+          ctx.fillStyle = gradient(0, py, 0, cellBottom, [[0, '#438ed6'], [1, '#3784cc']]);
+          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (!cell) continue;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+        }
+      }
+      continue;
+    }
+    if (state.game.level === 2 && levelTwoBoardImage.complete && levelTwoBoardImage.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelTwoBoardImage, x, y, width, height);
+      ctx.restore();
+
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellRight = x + Math.round((column + 1) * width / cols);
+          const cellBottom = y + Math.round((row + 1) * height / rows);
+          const cellWidth = cellRight - px;
+          const cellHeight = cellBottom - py;
+          ctx.fillStyle = '#86c9e8';
+          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (!cell) continue;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+        }
+      }
+      continue;
+    }
+    if (state.game.level === 3 && levelThreeBoardImage.complete && levelThreeBoardImage.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelThreeBoardImage, x, y, width, height);
+      ctx.restore();
+
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellRight = x + Math.round((column + 1) * width / cols);
+          const cellBottom = y + Math.round((row + 1) * height / rows);
+          const cellWidth = cellRight - px;
+          const cellHeight = cellBottom - py;
+          ctx.fillStyle = state.game.config.gridBackground ?? '#1765a5';
+          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (!cell) continue;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+        }
+      }
+      continue;
+    }
+    if (state.game.level === 4 && state.game.moves === 0
+      && levelFourBoardCellsImage.complete && levelFourBoardCellsImage.naturalWidth > 0) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelFourBoardCellsImage, x, y, width, height);
+        ctx.restore();
+
+        for (let column = 12; column < 25; column += 1) {
+          const cell = state.game.grid[11 * cols + column];
+          if (!cell) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(11 * height / rows);
+          const cellWidth = x + Math.round((column + 1) * width / cols) - px;
+          const cellHeight = y + Math.round(12 * height / rows) - py;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 3);
+        }
+        continue;
+      }
+    }
+    if (state.game.level === 5 && levelFiveBoardImage.complete && levelFiveBoardImage.naturalWidth > 0) {
+      roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+      ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+      ctx.fill();
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelFiveBoardImage, x, y, width, height);
+      ctx.restore();
+
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellWidth = x + Math.round((column + 1) * width / cols) - px;
+          const cellHeight = y + Math.round((row + 1) * height / rows) - py;
+          ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (!cell) continue;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+        }
+      }
+      continue;
+    }
+    if (state.game.level === 6 && state.game.moves === 0
+      && levelSixBoardImage.complete && levelSixBoardImage.naturalWidth > 0) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#428dce';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelSixBoardImage, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    if (state.game.level === 7 && state.game.moves === 0
+      && levelSevenBoardImage.complete && levelSevenBoardImage.naturalWidth > 0) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelSevenBoardImage, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    if (state.game.level === 9 && state.game.moves === 0
+      && levelNineBoardImage.complete && levelNineBoardImage.naturalWidth > 0) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#428dce';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelNineBoardImage, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    if (state.game.level === 12 && state.game.moves === 0
+      && levelTwelveBoardImage.complete && levelTwelveBoardImage.naturalWidth > 0
+      && boardMatchesSourceLayout(board)) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#428dce';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelTwelveBoardImage, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    if (state.game.level === 13 && state.game.moves === 0
+      && levelThirteenBoardImage.complete && levelThirteenBoardImage.naturalWidth > 0) {
+      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
+        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
+        return source && bucket.x === source.x && bucket.y === source.y;
+      });
+      if (startsAtSourcePositions && boardMatchesSourceLayout(board)) {
+        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+        ctx.fillStyle = state.game.config.gridBackground ?? '#428dce';
+        ctx.fill();
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelThirteenBoardImage, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    const boardHasNoClearedCells = state.game.grid
+      .slice(board.cellOffset, board.cellOffset + cols * rows)
+      .every((cell) => cell && !cell.split);
+    if (state.game.level === 11 && boardHasNoClearedCells) {
+      const image = levelElevenBoardImages[board.id];
+      if (image?.complete && image.naturalWidth > 0) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(image, x, y, width, height);
+        ctx.restore();
+        continue;
+      }
+    }
+    if (state.game.level === 8 && levelEightBoardImage.complete && levelEightBoardImage.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelEightBoardImage, x, y, width, height);
+      ctx.restore();
+
+      const cw = width / cols;
+      const ch = height / rows;
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellWidth = x + Math.round((column + 1) * width / cols) - px;
+          const cellHeight = y + Math.round((row + 1) * height / rows) - py;
+          ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (!cell) continue;
+          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+        }
+      }
+      continue;
+    }
+    if (state.game.level === 10 && levelTenBoardImage.complete && levelTenBoardImage.naturalWidth > 0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelTenBoardImage, x, y, width, height);
+      for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < cols; column += 1) {
+          const initialCell = state.game.config.paint(column, row);
+          if (!initialCell) continue;
+          const cell = state.game.grid[board.cellOffset + row * cols + column];
+          if (cell && !cell.split && cell.color === initialCell.color) continue;
+          const px = x + Math.round(column * width / cols);
+          const py = y + Math.round(row * height / rows);
+          const cellRight = x + Math.round((column + 1) * width / cols);
+          const cellBottom = y + Math.round((row + 1) * height / rows);
+          const cellWidth = cellRight - px;
+          const cellHeight = cellBottom - py;
+          if (levelTenEmptyTileImage.complete && levelTenEmptyTileImage.naturalWidth > 0) {
+            ctx.drawImage(levelTenEmptyTileImage, px, py, cellWidth, cellHeight);
+          } else {
+            ctx.fillStyle = state.game.config.gridBackground ?? '#428dce';
+            ctx.fillRect(px, py, cellWidth, cellHeight);
+          }
+          if (cell) drawPixelCell(px, py, cellWidth, cellHeight, cell.color, row * cols + column);
+        }
+      }
+      ctx.restore();
+      continue;
+    }
+
+    roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
+    ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
+    ctx.fill();
+    const cw = width / cols;
+    const ch = height / rows;
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < cols; column += 1) {
+        const cell = state.game.grid[board.cellOffset + row * cols + column];
+        if (!cell) continue;
+        const px = x + column * cw;
+        const py = y + row * ch;
+        if (cell.split) {
+          drawPixelCell(px + 0.4, py + 0.4, cw * 0.48, ch * 0.48, cell.color, row * cols + column);
+          drawPixelCell(px + cw * 0.52, py + 0.4, cw * 0.48, ch * 0.48, cell.color, row * cols + column + 1);
+          drawPixelCell(px + 0.4, py + ch * 0.52, cw * 0.48, ch * 0.48, cell.color, row * cols + column + 2);
+          drawPixelCell(px + cw * 0.52, py + ch * 0.52, cw * 0.48, ch * 0.48, cell.color, row * cols + column + 3);
+        } else {
+          const sourceSizedCell = state.game.level === 8;
+          drawPixelCell(px, py, sourceSizedCell ? cw : cw - 0.5, sourceSizedCell ? ch : ch - 0.45, cell.color, row * cols + column);
+        }
+      }
+    }
+  }
+}
+
+function drawPadTiles(pad) {
+  if (state.game.level === 10 && levelTenPadImage.complete && levelTenPadImage.naturalWidth > 0) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelTenPadImage, 50, 541);
+    ctx.restore();
+    return;
+  }
+  const { x, y, cols, rows, cellWidth, cellHeight, gap } = pad;
+  const levelThreePad = state.game.level === 3;
+  const levelOneSourcePad = state.game.level === 1
+    && levelOnePadCellImages.every((image) => image.complete && image.naturalWidth > 0);
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < cols; column += 1) {
+      const rowRange = pad.rowRanges?.[row];
+      if (rowRange && (column < rowRange[0] || column >= rowRange[1])) continue;
+      const px = x + column * (cellWidth + gap);
+      const py = y + row * (cellHeight + gap);
+      ctx.save();
+      ctx.shadowColor = '#2d6284a1';
+      ctx.shadowBlur = 6;
+      ctx.shadowOffsetY = 4;
+      roundedRect(px, py, cellWidth, cellHeight, Math.min(cellWidth, cellHeight) * 0.22);
+      ctx.fillStyle = levelThreePad
+        ? gradient(px, py, px + cellWidth, py + cellHeight, [
+          [0, '#9fc6e1'], [0.18, '#d6efff'], [0.72, '#c3e2f5'], [1, '#8fb7d8'],
+        ])
+        : gradient(px, py, px, py + cellHeight, [
+          [0, (row + column) % 2 ? '#d1edfa' : '#c3e1f1'], [0.5, '#c4e1f2'], [1, '#a9cce3'],
+        ]);
+      ctx.fill();
+      ctx.restore();
+      roundedRect(px + 2, py + 2, cellWidth - 4, cellHeight - 4, Math.min(cellWidth, cellHeight) * 0.2);
+      ctx.lineWidth = levelThreePad ? 1.25 : 2;
+      ctx.strokeStyle = levelThreePad ? '#e9f8ff88' : '#eafaffaa';
+      ctx.stroke();
+      if (levelThreePad) {
+        roundedRect(px + 3.5, py + 3.5, cellWidth - 7, cellHeight - 7, Math.min(cellWidth, cellHeight) * 0.18);
+        ctx.lineWidth = 1.1;
+        ctx.strokeStyle = '#75a7cb55';
+        ctx.stroke();
+      }
+    }
+  }
+  if (levelOneSourcePad) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (let column = 0; column < Math.min(cols, levelOnePadCellImages.length); column += 1) {
+      ctx.drawImage(levelOnePadCellImages[column], x + column * (cellWidth + gap), y, cellWidth, cellHeight);
+    }
+    ctx.restore();
+  }
+}
+
+function drawPad() {
+  const config = state.game.config;
+  if (config.panels) {
+    for (const panel of config.panels) drawPadTiles(panel.pad);
+    return;
+  }
+  drawPadTiles(config.pad);
+  if (config.layout === 'pipes') drawPipeTracks();
+}
+
+function drawPipeTracks() {
+  const channels = state.game.config.pipeChannels;
+  const track = state.game.config.pipeTrack ?? { y: 603, height: 485, width: 78, inset: 18 };
+  const { y, height, width, inset } = track;
+  for (const x of channels) {
+    ctx.save();
+    ctx.shadowColor = '#27618c77';
+    ctx.shadowBlur = 7;
+    ctx.shadowOffsetY = 4;
+    roundedRect(x, y, width, height, Math.min(36, width / 2));
+    ctx.fillStyle = gradient(x, y, x + width, y, [[0, '#87c8e9'], [0.25, '#f7ffff'], [0.6, '#8abde0'], [1, '#4f85bb']]);
+    ctx.fill();
+    ctx.restore();
+    roundedRect(x + inset, y + inset, width - inset * 2, height - inset * 2, Math.max(8, width / 4));
+    ctx.fillStyle = gradient(x + inset, 0, x + width - inset, 0, [[0, '#21659b'], [0.5, '#123f75'], [1, '#21659b']]);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#e7fbff';
+    ctx.stroke();
+  }
+}
+
+function drawBucket(bucket, lockedPreview = false) {
+  const { color, x, y, width, height } = bucket;
+  const theme = state.game.level === 8
+    ? LEVEL_PIXEL_THEMES[8][color] ?? COLORS_3D[color]
+    : COLORS_3D[color];
+  const progress = getProgress(state.game, bucket);
+  const segments = bucket.segments?.length
+    ? bucket.segments
+    : [{ x: 0, y: 0, width, height }];
+  const composite = Boolean(bucket.segments?.length);
+  const levelOneScaleY = state.game.level === 1 && progress > 0
+    ? 1.05 + (1 - progress / 100) * 0.02
+    : 1;
+  ctx.save();
+  ctx.translate(0, y);
+  ctx.scale(1, levelOneScaleY);
+  ctx.translate(0, -y);
+
+  for (const segment of segments) {
+    const sx = x + segment.x;
+    const sy = y + segment.y;
+    const sw = segment.width;
+    const sh = segment.height;
+    const radius = Math.min(29, sw * 0.22, sh * 0.22);
+    ctx.save();
+    ctx.shadowColor = '#28506f77';
+    ctx.shadowBlur = 9;
+    ctx.shadowOffsetY = 6;
+    roundedRect(sx, sy, sw, sh, radius);
+    ctx.fillStyle = gradient(x, sy, x + width, sy, [
+      [0, theme.dark], [0.16, theme.light], [0.48, theme.mid], [0.84, theme.dark], [1, theme.deep],
+    ]);
+    ctx.fill();
+    if (state.game.level === 1) {
+      roundedRect(sx + 3, sy + sh - 31, sw - 6, 30, Math.max(7, radius * 0.55));
+      ctx.fillStyle = gradient(0, sy + sh - 31, 0, sy + sh, [[0, theme.dark], [0.35, theme.dark], [1, theme.deep]]);
+      ctx.fill();
+    }
+    ctx.lineWidth = state.game.level === 3 ? 2 : 4;
+    ctx.strokeStyle = state.game.level === 3
+      ? theme.dark
+      : gradient(x, y, x + width, y, [
+        [0, theme.dark], [0.16, theme.light], [0.48, theme.mid], [0.84, theme.dark], [1, theme.deep],
+      ]);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const interiors = segments.map((segment) => {
+    const sx = x + segment.x;
+    const sy = y + segment.y;
+    const sw = segment.width;
+    const sh = segment.height;
+    const insetX = state.game.level === 1 ? 18 : composite ? 9 : Math.min(15, sw * 0.11);
+    const insetTop = state.game.level === 1 ? Math.min(20, sh * 0.09) : composite ? 9 : Math.min(35, sh * 0.15);
+    const insetBottom = state.game.level === 1 ? 26 : composite ? 9 : Math.min(17, sh * 0.08);
+    return {
+      segment: { sx, sy, sw, sh },
+      x: sx + insetX,
+      y: sy + insetTop,
+      width: sw - insetX * 2,
+      height: sh - insetTop - insetBottom,
+    };
+  });
+
+  for (const { segment } of interiors) {
+    const { sx, sy, sw, sh } = segment;
+    const radius = Math.min(23, sw * 0.2, sh * 0.2);
+    roundedRect(sx + 8, sy + 9, sw - 16, sh - 18, Math.max(6, radius - 6));
+    ctx.fillStyle = gradient(sx, y + 5, sx, y + height, [
+      [0, theme.light], [0.18, theme.mid], [0.55, theme.dark], [1, theme.mid],
+    ]);
+    ctx.fill();
+  }
+
+  const cavities = interiors.filter((cavity) => cavity.width > 4 && cavity.height > 4);
+
+  for (const cavity of cavities) {
+    const { x: insetX, y: insetY, width: insetW, height: insetH } = cavity;
+    roundedRect(insetX, insetY, insetW, insetH, Math.min(16, insetW * 0.12, insetH * 0.12));
+    const levelThreeCavity = state.game.level === 3 ? {
+      yellow: ['#423600', '#302900', '#17180a'],
+      purple: ['#11134f', '#101641', '#080d29'],
+      blue: ['#08354d', '#082a40', '#061d31'],
+    }[color] : null;
+    ctx.fillStyle = gradient(0, insetY, 0, insetY + insetH, levelThreeCavity
+      ? [[0, levelThreeCavity[0]], [0.2, levelThreeCavity[0]], [0.52, levelThreeCavity[1]], [1, levelThreeCavity[2]]]
+      : [[0, theme.deep], [0.2, theme.deep], [0.52, '#38271f'], [1, '#17191e']]);
+    ctx.fill();
+  }
+
+  const slots = cavities.map((cavity) => {
+    const columns = Math.max(3, Math.floor((cavity.width - 12) / 13));
+    const rows = Math.max(3, Math.floor((cavity.height - 8) / 13));
+    return { cavity, columns, rows, capacity: columns * rows };
+  }).sort((a, b) => b.cavity.y - a.cavity.y);
+  let remaining = lockedPreview ? 0 : Math.round(slots.reduce((sum, slot) => sum + slot.capacity, 0) * (progress / 100));
+  let serial = 0;
+  let sourcePileUsed = false;
+  {
+    let seed = 0;
+    seed = state.game.level * 7919;
+    for (const character of bucket.id) seed = (seed * 31 + character.charCodeAt(0)) >>> 0;
+    const noise = (index, salt) => {
+      let value = Math.sin((seed + index * 17 + salt * 113) * 12.9898) * 43758.5453;
+      return value - Math.floor(value);
+    };
+
+    for (const slot of slots) {
+      const { cavity } = slot;
+      const count = Math.min(slot.capacity, remaining);
+      remaining -= count;
+      if (state.game.level === 1 && color === 'yellow' && progress === 100 && !lockedPreview
+        && levelOneYellowPileImage.complete && levelOneYellowPileImage.naturalWidth > 0) {
+        ctx.save();
+        roundedRect(cavity.x, cavity.y, cavity.width, cavity.height, Math.min(16, cavity.width * 0.12, cavity.height * 0.12));
+        ctx.clip();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(levelOneYellowPileImage, cavity.x, cavity.y + 2, cavity.width, levelOneYellowPileImage.naturalHeight / levelOneScaleY);
+        ctx.restore();
+        sourcePileUsed = true;
+        continue;
+      }
+      const fragmentCount = state.game.level === 1 ? Math.round(count * 1.45) : Math.round(count * 3.2);
+      const fillHeight = cavity.height * Math.pow(progress / 100, state.game.level === 1 ? 0.16 : 0.22);
+      const levelOneRowStep = cavity.height / Math.max(slot.rows, Math.ceil(fragmentCount / slot.columns));
+      const pieces = Array.from({ length: fragmentCount }, (_, index) => {
+        const levelOnePacked = state.game.level === 1;
+        const row = Math.floor(index / slot.columns);
+        const column = (index * 7 + row * 3) % slot.columns;
+        const columnStep = cavity.width / slot.columns;
+        const rowStep = cavity.height / slot.rows;
+        const size = levelOnePacked
+          ? Math.min(17, columnStep, rowStep) * (0.94 + noise(index, 1) * 0.25)
+          : 7 + noise(index, 1) * 6;
+        const heightOffset = noise(index, 3) ** 0.82 * fillHeight;
+        const x = levelOnePacked
+          ? cavity.x + (column + 0.5) * columnStep + (noise(index, 2) - 0.5) * columnStep * 0.4
+          : cavity.x + 4 + noise(index, 2) * (cavity.width - 8);
+        const y = levelOnePacked
+          ? cavity.y + (row + 0.5) * levelOneRowStep + (noise(index, 3) - 0.5) * levelOneRowStep * 0.4
+          : cavity.y + cavity.height - 4 - heightOffset;
+        return {
+          x,
+          y,
+          size,
+          angle: (noise(index, 4) - 0.5) * Math.PI * (levelOnePacked ? 0.55 : 0.9),
+          alpha: (levelOnePacked ? 0.9 : 0.82) + noise(index, 5) * (levelOnePacked ? 0.1 : 0.18),
+          serial: serial++,
+        };
+      }).sort((a, b) => a.y - b.y);
+
+      ctx.save();
+      roundedRect(cavity.x, cavity.y, cavity.width, cavity.height, Math.min(16, cavity.width * 0.12, cavity.height * 0.12));
+      ctx.clip();
+      for (const piece of pieces) {
+        ctx.save();
+        ctx.globalAlpha = piece.alpha;
+        ctx.shadowColor = `${theme.deep}aa`;
+        ctx.shadowBlur = 2;
+        if (state.game.level === 8) {
+          ctx.translate(piece.x, piece.y);
+          ctx.rotate(piece.angle);
+          drawPixelCell(-piece.size / 2, -piece.size / 2, piece.size, piece.size, color, piece.serial);
+        } else {
+          loadingVoxel(piece.x, piece.y, piece.size, color, piece.angle, false, state.game.level === 1 ? LEVEL_ONE_PILE_THEMES[color] : null);
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+
+  if (state.game.level === 1 && color === 'yellow' && progress > 0 && progress <= 10 && !lockedPreview && cavities[0]) {
+    const cavity = cavities[0];
+    ctx.save();
+    roundedRect(cavity.x, cavity.y, cavity.width, cavity.height, Math.min(16, cavity.width * 0.12, cavity.height * 0.12));
+    ctx.clip();
+    loadingVoxel(cavity.x + cavity.width * 0.51, cavity.y + cavity.height * 0.66, 18, color, -0.12, false, LEVEL_ONE_PILE_THEMES[color]);
+    ctx.restore();
+  }
+
+  if (!lockedPreview && !sourcePileUsed) {
+    const firstLevelYellowProgress = state.game.level === 1 && color === 'yellow' && progress > 0 && progress < 100;
+    const label = firstLevelYellowProgress ? {
+      x: width - 24,
+      y: 34,
+      align: 'right',
+    } : bucket.progressLabel ?? {
+      x: width - 10,
+      y: Math.max(19, Math.min(31, height * 0.44)),
+      align: 'right',
+    };
+    const labelY = label.y;
+    drawText(`${progress}%`, x + label.x, y + labelY, {
+      size: label.size ?? Math.max(16, Math.min(27, Math.min(width, height) * 0.36)),
+      align: label.align, fill: '#fff', stroke: '#1a1b24', lineWidth: 6, shadow: '#10131b', shadowY: 1,
+    });
+  }
+  ctx.restore();
+}
+
+function drawBuckets() {
+  for (const bucket of state.game.buckets) {
+    if (!bucket.visible && !bucket.showLocked && state.game.activeBucketId !== bucket.id) continue;
+    if (state.game.level === 10) {
+      const image = levelTenBucketImages.get(bucket.id);
+      const origin = levelTenBucketOrigins.get(bucket.id);
+      const untouched = image?.complete && image.naturalWidth > 0
+        && origin && bucket.x === origin.x && bucket.y === origin.y
+        && getProgress(state.game, bucket) === 0 && !bucket.showLocked;
+      if (untouched) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(image, bucket.x, bucket.y);
+        ctx.restore();
+        continue;
+      }
+    }
+    drawBucket(bucket, !bucket.visible);
+  }
+  const levelTenUntouched = state.game.level === 10 && state.game.buckets.every((bucket) => {
+    const origin = levelTenBucketOrigins.get(bucket.id);
+    return origin && bucket.x === origin.x && bucket.y === origin.y && getProgress(state.game, bucket) === 0;
+  });
+  if (levelTenUntouched && levelTenPipeImages.every((image) => image.complete && image.naturalWidth > 0)) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    levelTenPipeImages.forEach((image, index) => {
+      ctx.drawImage(image, state.game.config.pipeChannels[index], state.game.config.pipeTrack.y);
+    });
+    ctx.restore();
+  }
+}
+
+function drawTutorialCard(now) {
+  const x = 47;
+  const y = 1068;
+  const width = 503;
+  const height = 136;
+  ctx.save();
+  ctx.shadowColor = '#564b9c77';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 7;
+  roundedRect(x, y, width, height, 25);
+  ctx.fillStyle = gradient(0, y, 0, y + height, [[0, '#8477c8'], [0.45, '#6456a5'], [1, '#463c86']]);
+  ctx.fill();
+  ctx.restore();
+  roundedRect(x + 10, y + 9, width - 20, height - 19, 18);
+  ctx.fillStyle = gradient(0, y + 10, 0, y + height - 10, [[0, '#fbf5dd'], [0.55, '#f5eee0'], [1, '#ddd7c4']]);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#fff9e8';
+  ctx.stroke();
+
+  const hint = '拖动收集槽来收集像素块';
+  const glow = !state.game.started && !prefersReducedMotion.matches ? Math.sin(now / 480) * 1.5 : 0;
+  drawText(hint, 298, 1143 + glow, {
+    size: 30, align: 'center', fill: '#8b2d19', stroke: '#522013', lineWidth: 5, shadow: '#e8ad56', shadowY: 2,
+  });
+}
+
+function drawHand(now) {
+  if (state.game.started || state.game.status !== 'tutorial') return;
+  const bob = prefersReducedMotion.matches ? 0 : Math.sin(now / 300) * 5;
+  ctx.save();
+  ctx.translate(0, bob + 64);
+  ctx.translate(302, 8);
+  ctx.scale(0.82, 1);
+  ctx.translate(-302, 0);
+  ctx.shadowColor = '#28618e70';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 8;
+  ctx.save();
+  ctx.translate(0, 561);
+  ctx.scale(1, 0.9);
+  ctx.translate(0, -561);
+
+  ctx.beginPath();
+  ctx.moveTo(384, 643);
+  ctx.lineTo(350, 626);
+  ctx.quadraticCurveTo(343, 623, 339, 616);
+  ctx.lineTo(308, 572);
+  ctx.quadraticCurveTo(302, 562, 311, 555);
+  ctx.quadraticCurveTo(320, 550, 328, 559);
+  ctx.lineTo(356, 592);
+  ctx.lineTo(349, 579);
+  ctx.quadraticCurveTo(344, 568, 353, 564);
+  ctx.quadraticCurveTo(362, 560, 369, 571);
+  ctx.lineTo(381, 589);
+  ctx.lineTo(376, 580);
+  ctx.quadraticCurveTo(372, 569, 382, 565);
+  ctx.quadraticCurveTo(391, 562, 397, 574);
+  ctx.lineTo(409, 593);
+  ctx.lineTo(406, 587);
+  ctx.quadraticCurveTo(402, 576, 412, 573);
+  ctx.quadraticCurveTo(421, 571, 427, 583);
+  ctx.lineTo(452, 624);
+  ctx.quadraticCurveTo(464, 644, 451, 663);
+  ctx.lineTo(437, 682);
+  ctx.quadraticCurveTo(428, 694, 409, 687);
+  ctx.lineTo(383, 676);
+  ctx.quadraticCurveTo(365, 669, 361, 653);
+  ctx.closePath();
+  ctx.fillStyle = gradient(310, 550, 425, 686, [[0, '#ffffff'], [0.38, '#e7f5ff'], [0.76, '#b1d5f4'], [1, '#76ade2']]);
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#f8ffff';
+  ctx.stroke();
+  ctx.shadowColor = 'transparent';
+
+  ctx.beginPath();
+  ctx.moveTo(355, 604);
+  ctx.lineTo(375, 628);
+  ctx.moveTo(382, 601);
+  ctx.lineTo(400, 627);
+  ctx.moveTo(410, 605);
+  ctx.lineTo(423, 627);
+  ctx.strokeStyle = '#8ebae2';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(410, 656);
+  ctx.rotate(0.38);
+  roundedRect(-6, -3, 55, 28, 13);
+  ctx.fillStyle = gradient(0, -3, 0, 28, [[0, '#83d8ff'], [0.38, '#198be1'], [1, '#17529b']]);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#d9f6ff';
+  ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
+function drawParticles(now) {
+  const particles = state.game.particles;
+  const remaining = [];
+  for (const particle of particles) {
+    const t = Math.min(1, (now - particle.bornAt) / particle.duration);
+    if (t >= 1) continue;
+    remaining.push(particle);
+    const eased = 1 - (1 - t) ** 3;
+    const x = particle.x + (particle.targetX - particle.x) * eased + Math.sin(t * Math.PI * 2 + particle.phase) * 12;
+    const y = particle.y + (particle.targetY - particle.y) * eased + Math.sin(t * Math.PI * 4 + particle.phase) * (1 - t) * 7;
+    const size = Math.max(3, particle.size * (1 - t * 0.42));
+    ctx.save();
+    ctx.globalAlpha = 1 - t * 0.42;
+    if (state.game.level === 8) {
+      ctx.translate(x, y);
+      ctx.rotate(particle.phase + t * Math.PI * 2);
+      drawPixelCell(-size / 2, -size / 2, size, size, particle.color, particle.serial);
+    } else {
+      loadingVoxel(x, y, size, particle.color, particle.phase + t * Math.PI * 2, true);
+    }
+    ctx.restore();
+  }
+  state.game.particles = remaining;
+}
+
+function drawFlyingSaucer(now) {
+  if (state.game.level !== 13 || (!state.ufoMode && !state.ufoFlight)) return;
+  const flight = state.ufoFlight;
+  let progress = 0;
+  if (flight) {
+    progress = Math.min(1, (now - flight.startedAt) / flight.duration);
+  }
+  const travel = flight ? Math.min(1, (now - flight.startedAt) / flight.travelDuration) : 0;
+  const eased = travel * travel * (3 - 2 * travel);
+  const hover = state.ufoMode ? Math.sin(now / 260) * 7 : 0;
+  const from = flight?.from ?? { x: 294, y: 415 + hover };
+  const to = flight?.to ?? { x: from.x, y: 620 };
+  const cx = from.x + (to.x - from.x) * eased;
+  const cy = from.y + (to.y - from.y) * eased;
+  const hoverFlight = flight ? Math.max(0, now - flight.startedAt - flight.travelDuration) : 0;
+  const flightBob = flight ? Math.sin(hoverFlight / 170) * Math.min(6, hoverFlight / 90) : 0;
+  const angle = flight ? Math.atan2(to.y - from.y, to.x - from.x) * 0.12 * Math.sin(travel * Math.PI) : 0;
+  const beamTargetY = flight ? flight.targetY : cy + 170;
+
+  ctx.save();
+  ctx.globalAlpha = flight ? 0.48 * (1 - progress * 0.35) : 0.32;
+  ctx.beginPath();
+  ctx.moveTo(cx - 54, cy + 15);
+  ctx.lineTo(cx - 70, beamTargetY);
+  ctx.lineTo(cx + 70, beamTargetY);
+  ctx.lineTo(cx + 54, cy + 15);
+  ctx.closePath();
+  ctx.fillStyle = gradient(0, cy, 0, beamTargetY, [[0, '#fff79c88'], [0.45, '#fff38a3c'], [1, '#dfffff00']]);
+  ctx.fill();
+  ctx.restore();
+
+  if (flight) {
+    for (let i = 0; i < 11; i += 1) {
+      const phase = (progress * 2.8 + i / 11) % 1;
+      const x = from.x + (to.x - from.x) * phase + Math.sin(i * 9 + now / 90) * 18;
+      const y = cy + flightBob + 34 + (beamTargetY - cy - 34) * phase;
+      const size = 4 + (i % 3) * 2;
+      ctx.save();
+      ctx.globalAlpha = 0.65 * (1 - phase * 0.4);
+      ctx.fillStyle = i % 2 ? '#fff28a' : '#f9c623';
+      ctx.translate(x, y);
+      ctx.rotate((i + now / 200) % 1.2);
+      ctx.fillRect(-size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.translate(0, flightBob);
+  ctx.rotate(angle);
+  ctx.shadowColor = '#15345288';
+  ctx.shadowBlur = 20;
+  ctx.shadowOffsetY = 16;
+  ctx.beginPath();
+  ctx.ellipse(0, 37, 144, 18, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#1d2d4b';
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.beginPath();
+  ctx.ellipse(0, 8, 150, 43, 0, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(0, -32, 0, 50, [[0, '#ff6f58'], [0.42, '#ef2e28'], [0.78, '#c81427'], [1, '#851129']]);
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#ff9e89';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, 28, 137, 18, 0, 0.08, Math.PI - 0.08);
+  ctx.strokeStyle = '#ffc6a9';
+  ctx.lineWidth = 4;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.ellipse(0, -13, 87, 59, 0, Math.PI, Math.PI * 2);
+  ctx.lineTo(87, -12);
+  ctx.ellipse(0, -12, 87, 20, 0, 0, Math.PI);
+  ctx.closePath();
+  ctx.fillStyle = gradient(-50, -70, 58, 5, [[0, '#d7f4ffcc'], [0.3, '#72beeddd'], [0.72, '#334f9eee'], [1, '#172f6e']]);
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#455a92';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 81, 18, 0, 0, Math.PI);
+  ctx.strokeStyle = '#b5edff';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  for (const x of [-102, 0, 102]) {
+    ctx.beginPath();
+    ctx.ellipse(x, 1, 18, 12, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#198ed4';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x, -1, 12, 8, 0, 0, Math.PI * 2);
+    ctx.fillStyle = gradient(x, -8, x, 8, [[0, '#fffca1'], [0.55, '#ffda24'], [1, '#f39713']]);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(0, -68);
+  ctx.lineTo(0, -91);
+  ctx.strokeStyle = '#283b69';
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, -97, 13, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(-8, -106, 8, -87, [[0, '#fff36d'], [0.5, '#ffca1c'], [1, '#f28a16']]);
+  ctx.fill();
+  ctx.restore();
+}
+
+function addCollectedEffects(cells, now, bucket, { announce = true, playSound = true } = {}) {
+  if (!bucket) return;
+  const sampleStride = Math.max(1, Math.ceil(cells.length / 200));
+  const sampledCells = Math.ceil(cells.length / sampleStride);
+  const fragmentsPerCell = Math.min(4, Math.max(1, Math.ceil(240 / Math.max(1, sampledCells))));
+  for (let cellIndex = 0; cellIndex < cells.length; cellIndex += sampleStride) {
+    const cell = cells[cellIndex];
+    for (let fragment = 0; fragment < fragmentsPerCell; fragment += 1) {
+      const serial = state.particleSerial++;
+      const random = (salt) => {
+        const value = Math.sin((serial * 17 + salt * 113) * 12.9898) * 43758.5453;
+        return value - Math.floor(value);
+      };
+      state.game.particles.push({
+        x: cell.x + (random(1) - 0.5) * 12,
+        y: cell.y + (random(2) - 0.5) * 12,
+        targetX: bucket.x + bucket.width * (0.12 + random(3) * 0.76),
+        targetY: bucket.y + bucket.height * (0.12 + random(4) * 0.2),
+        color: cell.color,
+        bornAt: now,
+        duration: 650 + random(5) * 600,
+        phase: random(6) * Math.PI * 2,
+        size: 8 + random(7) * 9,
+        serial,
+      });
+    }
+  }
+  if (cells.length) {
+    state.moveCollected += cells.length;
+    if (playSound) audio.cue('collect');
+    if (announce) liveStatus.textContent = `已收集 ${cells.length} 个${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket)}%`;
+  }
+}
+
+const LEVEL_ONE_SOURCE_SEGMENTS = {
+  yellow: { start: 0, end: 2.0 },
+  green: { start: 2.5, end: 4.0 },
+  red: { start: 4.0, end: 5.95 },
+};
+
+// The source recording reaches the wall about half a second after the yellow
+// and green sweep segments begin. The red segment starts on its first visible
+// progress frame, so it has no lead-in.
+const LEVEL_ONE_SOURCE_DRAG_LEADS_MS = { yellow: 500, green: 500, red: 0 };
+
+const LEVEL_ONE_PROGRESS_STOPS = {
+  yellow: [[0.06, 1_000], [0.36, 1_250], [0.63, 1_500], [0.99, 1_750], [1, 2_000]],
+  green: [[0.25, 750], [0.48, 900], [0.71, 1_050], [0.85, 1_200], [0.99, 1_350], [1, 1_500]],
+  red: [[0.03, 0], [0.06, 200], [0.69, 233], [0.72, 250], [0.77, 283], [0.82, 333], [0.86, 367], [0.92, 383], [0.96, 450], [1, 550]],
+};
+
+function levelOneSourceSegment(color) {
+  return LEVEL_ONE_SOURCE_SEGMENTS[color] ?? null;
+}
+
+function prepareLevelOneSourceSegment(color) {
+  const segment = levelOneSourceSegment(color);
+  if (!segment || levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_METADATA) return;
+  const leadMs = LEVEL_ONE_SOURCE_DRAG_LEADS_MS[color] ?? 0;
+  const targetTime = Math.min(segment.end, segment.start + leadMs / 1_000);
+  if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) return;
+  levelOneSourceVideo.pause();
+  levelOneSourceVideo.currentTime = targetTime;
+}
+
+function startLevelOneSourceAnimation(color, sweep) {
+  const segment = levelOneSourceSegment(color);
+  if (!segment) return;
+  const timeline = { color, ...segment, sweep, completed: false, resumeAfterPause: false };
+  state.levelOneSourceTimeline = timeline;
+  levelOneSourceVideo.pause();
+
+  const seekAndPlay = () => {
+    if (state.levelOneSourceTimeline !== timeline) return;
+    const elapsed = Math.max(0, (performance.now() - sweep.startedAt) / 1_000);
+    const targetTime = Math.min(segment.end, segment.start + elapsed);
+    if (targetTime >= segment.end) {
+      const finish = () => {
+        if (state.levelOneSourceTimeline !== timeline) return;
+        timeline.completed = true;
+        levelOneSourceVideo.pause();
+        levelOneSourceAudio.pause();
+        if (state.levelOneWonPending) {
+          state.game.status = 'won';
+          state.levelOneWonPending = false;
+        }
+      };
+      if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) finish();
+      else {
+        levelOneSourceVideo.addEventListener('seeked', finish, { once: true });
+        levelOneSourceVideo.currentTime = targetTime;
+      }
+      return;
+    }
+    const play = () => {
+      if (state.levelOneSourceTimeline !== timeline || state.game.status === 'paused' || document.hidden) return;
+      if (timeline.completed) return;
+      void levelOneSourceVideo.play().then(() => {
+        if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+        const elapsed = Math.max(0, (performance.now() - sweep.startedAt) / 1_000);
+        const targetTime = Math.min(segment.end, segment.start + elapsed);
+        if (Math.abs(levelOneSourceVideo.currentTime - targetTime) > 0.05) {
+          levelOneSourceVideo.currentTime = targetTime;
+        }
+      }).catch(() => {});
+    };
+    if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) {
+      play();
+      return;
+    }
+    levelOneSourceVideo.addEventListener('seeked', play, { once: true });
+    levelOneSourceVideo.currentTime = targetTime;
+  };
+
+  if (levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) seekAndPlay();
+  else levelOneSourceVideo.addEventListener('loadeddata', seekAndPlay, { once: true });
+}
+
+function updateLevelOneSourcePlayback() {
+  const timeline = state.levelOneSourceTimeline;
+  if (!timeline) return;
+  const shouldPause = state.game.status === 'paused' || document.hidden;
+  if (shouldPause) {
+    if (!levelOneSourceVideo.paused || !levelOneSourceAudio.paused) {
+      timeline.resumeAfterPause = true;
+      timeline.pauseStartedAt ??= performance.now();
+      levelOneSourceVideo.pause();
+      levelOneSourceAudio.pause();
+    }
+    return;
+  }
+  if (timeline.resumeAfterPause && !timeline.completed) {
+    if (timeline.pauseStartedAt) {
+      timeline.sweep.startedAt += performance.now() - timeline.pauseStartedAt;
+      timeline.pauseStartedAt = null;
+    }
+    timeline.resumeAfterPause = false;
+    void levelOneSourceVideo.play().catch(() => {});
+  }
+  const elapsed = Math.max(0, (performance.now() - timeline.sweep.startedAt) / 1_000);
+  const sourceTime = Math.min(timeline.end, timeline.start + elapsed);
+  if (!audio.isUsingSourceMix()) {
+    levelOneSourceAudio.pause();
+  } else if (!timeline.completed && levelOneSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    if (Math.abs(levelOneSourceAudio.currentTime - sourceTime) > 0.08) {
+      levelOneSourceAudio.currentTime = sourceTime;
+    }
+    if (sourceTime < timeline.end && levelOneSourceAudio.paused) {
+      void levelOneSourceAudio.play().catch(() => {});
+    }
+  }
+  if (!timeline.completed && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && levelOneSourceVideo.currentTime >= timeline.end) {
+    levelOneSourceVideo.pause();
+    levelOneSourceAudio.pause();
+    timeline.completed = true;
+    if (state.levelOneWonPending) {
+      state.game.status = 'won';
+      state.levelOneWonPending = false;
+    }
+  }
+}
+
+function updateLevelOneTutorialPlayback() {
+  const shouldPlay = state.game.level === 1
+    && state.game.status === 'tutorial'
+    && !state.game.started
+    && dialogLayer.hidden
+    && !document.hidden
+    && !prefersReducedMotion.matches
+    && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  if (shouldPlay && levelOneTutorialVideo.paused) {
+    void levelOneTutorialVideo.play().catch(() => {});
+  } else if (!shouldPlay && !levelOneTutorialVideo.paused) {
+    levelOneTutorialVideo.pause();
+  }
+}
+
+function levelOneSweepSchedule(cell, bucket, rank, total) {
+  const stops = LEVEL_ONE_PROGRESS_STOPS[bucket.color] ?? [[1, 1_000]];
+  const count = rank + 1;
+  const stopIndex = stops.findIndex(([progress]) => count <= Math.round(progress * total));
+  const resolvedStopIndex = stopIndex < 0 ? stops.length - 1 : stopIndex;
+  const [stopProgress, arrivalMs] = stops[resolvedStopIndex];
+  const previousCount = resolvedStopIndex === 0 ? 0 : Math.round(stops[resolvedStopIndex - 1][0] * total);
+  const previousArrivalMs = resolvedStopIndex === 0 ? 0 : stops[resolvedStopIndex - 1][1];
+  const batchCount = Math.max(1, Math.round(stopProgress * total) - previousCount);
+  const positionInBatch = Math.max(0, count - previousCount - 1);
+  const launchWindowStartMs = Math.max(previousArrivalMs, arrivalMs - 180);
+  const launchWindowMs = Math.max(0, arrivalMs - launchWindowStartMs);
+  const launchMs = Math.round(launchWindowStartMs + (positionInBatch / Math.max(1, batchCount - 1)) * launchWindowMs);
+  return { launchMs, arrivalMs };
+}
+
+function startLevelOneSweep(bucket, now) {
+  const targets = state.game.grid.flatMap((cell, index) => (
+    cell?.targetBucketId === bucket.id ? [{ cell, index }] : []
+  )).sort((a, b) => b.cell.row - a.cell.row || a.cell.column - b.cell.column);
+  const entries = targets.map(({ cell, index }, rank) => ({
+    cell,
+    index,
+    ...levelOneSweepSchedule(cell, bucket, rank, targets.length),
+    launched: false,
+    arrived: false,
+  }));
+  const sourceLead = LEVEL_ONE_SOURCE_DRAG_LEADS_MS[bucket.color] ?? 0;
+  bucket.sweep = {
+    startedAt: now - sourceLead,
+    entries,
+    lastAnnouncedProgress: 0,
+    soundPlayed: false,
+  };
+  startLevelOneSourceAnimation(bucket.color, bucket.sweep);
+  state.moveCollected = Math.max(1, state.moveCollected);
+  liveStatus.textContent = `${bucket.color === 'yellow' ? '黄色' : bucket.color === 'green' ? '绿色' : '红色'}像素开始飞向收集槽`;
+}
+
+function addLevelOneSweepParticle(cell, bornAt, arrivalAt, bucket) {
+  const serial = state.particleSerial++;
+  const random = (salt) => {
+    const value = Math.sin((serial * 17 + salt * 113) * 12.9898) * 43758.5453;
+    return value - Math.floor(value);
+  };
+  const wallBottom = state.game.gridRect.y + state.game.gridRect.height;
+  state.game.particles.push({
+    x: cell.x + (random(1) - 0.5) * 8,
+    y: cell.y + (wallBottom - cell.y) * 0.55 - 30 + (random(2) - 0.5) * 10,
+    targetX: bucket.x + bucket.width * (0.02 + random(3) * 0.96),
+    targetY: bucket.y + bucket.height * (0.16 + random(4) * 0.18),
+    color: cell.color,
+    bornAt,
+    duration: Math.max(160, arrivalAt - bornAt),
+    phase: random(5) * Math.PI * 2,
+    size: 9 + random(6) * 9,
+    serial,
+  });
+}
+
+function advanceLevelOneSweep(now) {
+  for (const bucket of state.game.buckets.filter((candidate) => candidate.sweep && !candidate.sweep.completed)) {
+    const sweep = bucket.sweep;
+    if (state.game.status === 'paused') {
+      sweep.pausedAt ??= now;
+      continue;
+    }
+    if (sweep.pausedAt) {
+      sweep.startedAt += now - sweep.pausedAt;
+      sweep.pausedAt = null;
+    }
+
+    const elapsed = now - sweep.startedAt;
+    for (const entry of sweep.entries) {
+      if (!entry.launched && elapsed >= entry.launchMs) {
+        entry.launched = true;
+        state.game.grid[entry.index] = null;
+        const launchedAt = sweep.startedAt + entry.launchMs;
+        const arrivalAt = sweep.startedAt + entry.arrivalMs;
+        addLevelOneSweepParticle(entry.cell, launchedAt, arrivalAt, bucket);
+        if (!sweep.soundPlayed) {
+          audio.cue('collect');
+          sweep.soundPlayed = true;
+        }
+      }
+      if (entry.launched && !entry.arrived && elapsed >= entry.arrivalMs) {
+        entry.arrived = true;
+        state.game.collected[entry.cell.color] += 1;
+        state.game.bucketCollected[bucket.id] += 1;
+      }
+    }
+
+    const progress = getProgress(state.game, bucket);
+    const milestones = bucket.color === 'yellow'
+      ? [6, 36, 63, 99, 100]
+      : bucket.color === 'green' ? [25, 48, 71, 85, 99, 100]
+        : bucket.color === 'red' ? [3, 6, 69, 72, 77, 82, 86, 92, 96, 100] : null;
+    const sourceProgress = milestones?.includes(progress)
+      ? progress
+      : milestones?.find((milestone) => Math.abs(milestone - progress) <= 1);
+    const reportedProgress = sourceProgress ?? progress;
+    const shouldAnnounce = milestones
+      ? sourceProgress !== undefined && reportedProgress !== sweep.lastAnnouncedProgress
+      : progress !== sweep.lastAnnouncedProgress;
+    if (shouldAnnounce) {
+      sweep.lastAnnouncedProgress = reportedProgress;
+      const colorName = bucket.color === 'yellow' ? '黄色' : bucket.color === 'green' ? '绿色' : '红色';
+      liveStatus.textContent = `已收集 ${state.game.bucketCollected[bucket.id]} 个${colorName} 像素块，进度 ${reportedProgress}%`;
+    }
+    if (progress >= 100) {
+      sweep.completed = true;
+      bucket.completeAt = now;
+      if (state.game.grid.every((cell) => cell === null)) {
+        if (state.levelOneSourceTimeline?.color === 'red' && !state.levelOneSourceTimeline.completed) {
+          state.levelOneWonPending = true;
+        } else {
+          state.game.status = 'won';
+        }
+      }
+    }
+  }
+}
+
+function updateBoosterControls() {
+  const activeBooster = ['freeze', 'hammer', 'ufo'].includes(state.game.config.booster)
+    ? state.game.config.booster
+    : null;
+  boosterControls.hidden = state.loading || state.game.level === 1;
+  boosterControls.dataset.kind = activeBooster ?? '';
+  for (const button of boosterControls.querySelectorAll('[data-booster]')) {
+    const kind = button.dataset.booster;
+    const unlockAt = { freeze: 7, hammer: 9, ufo: 13 }[kind];
+    if (!unlockAt) {
+      button.classList.add('is-locked');
+      continue;
+    }
+    const charges = kind === 'freeze' ? state.freezeCharges : kind === 'hammer' ? state.hammerCharges : state.ufoCharges;
+    const locked = state.game.level < unlockAt;
+    button.disabled = locked || charges <= 0;
+    button.classList.toggle('is-locked', locked);
+    button.querySelector('.booster-count').textContent = String(charges);
+    button.querySelector('.booster-count').hidden = locked;
+    button.querySelector('.booster-lock').hidden = !locked;
+    button.classList.toggle('is-active', (kind === 'hammer' && state.hammerMode) || (kind === 'ufo' && state.ufoMode));
+  }
+}
+
+function activateBooster(kind) {
+  if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost') return;
+  void audio.startFromGesture();
+  audio.cue('button');
+  if (kind === 'freeze' && state.freezeCharges > 0) {
+    state.freezeCharges -= 1;
+    state.game.freezeRemaining = 20;
+    liveStatus.textContent = '时间已冻结 20 秒';
+  } else if (kind === 'hammer' && state.hammerCharges > 0) {
+    state.hammerMode = !state.hammerMode;
+    state.ufoMode = false;
+    liveStatus.textContent = state.hammerMode ? '已选中拆分锤，点击一块像素' : '已取消拆分锤';
+  } else if (kind === 'ufo' && state.ufoCharges > 0) {
+    state.ufoMode = !state.ufoMode;
+    state.hammerMode = false;
+    liveStatus.textContent = state.ufoMode ? '已选中飞碟，点击要填充的收集槽' : '已取消飞碟';
+  }
+  updateBoosterControls();
+}
+
+function activateSelectedBucket(bucket, now) {
+  if (!bucket) return false;
+  const availableCells = state.game.grid.filter((cell) => cell
+    && cell.targetBucketId === bucket.id
+    && cell.color === bucket.color);
+  if (!availableCells.length) {
+    liveStatus.textContent = `这个${colorName(bucket.color)}收集槽没有可填充的像素`;
+    return true;
+  }
+  state.ufoFlight = {
+    startedAt: now,
+    duration: 2500,
+    travelDuration: 1200,
+    fillDuration: 1300,
+    bucketId: bucket.id,
+    total: availableCells.length,
+    collected: 0,
+    soundPlayed: false,
+    from: { x: 294, y: 415 },
+    to: { x: bucket.x + bucket.width / 2, y: Math.max(590, bucket.y - 245) },
+    targetY: bucket.y + 8,
+  };
+  state.ufoCharges -= 1;
+  state.ufoMode = false;
+  liveStatus.textContent = `飞碟正在填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
+  updateBoosterControls();
+  return true;
+}
+
+function advanceUfoFlight(now) {
+  const flight = state.ufoFlight;
+  if (!flight) return;
+  const bucket = getBucket(state.game, flight.bucketId);
+  if (!bucket) {
+    state.ufoFlight = null;
+    return;
+  }
+  const elapsed = Math.max(0, now - flight.startedAt);
+  const progress = Math.min(1, elapsed / flight.duration);
+  const fillProgress = Math.min(1, Math.max(0, (elapsed - flight.travelDuration) / flight.fillDuration));
+  const easedFillProgress = fillProgress * fillProgress * (3 - 2 * fillProgress);
+  const targetCount = Math.floor(flight.total * easedFillProgress);
+  const count = targetCount - flight.collected;
+  if (count > 0) {
+    const cells = fillBucket(state.game, flight.bucketId, count);
+    flight.collected += cells.length;
+    const playSound = cells.length > 0 && !flight.soundPlayed;
+    if (playSound) flight.soundPlayed = true;
+    addCollectedEffects(cells, now, bucket, {
+      announce: false,
+      playSound,
+    });
+  }
+  if (progress >= 1) {
+    state.ufoFlight = null;
+    liveStatus.textContent = `飞碟已填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
+  } else if (count > 0) {
+    liveStatus.textContent = `飞碟正在填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
+  }
+}
+
+function maybeSplitPixel(point) {
+  const cell = splitCellAt(state.game, point.x, point.y);
+  if (!cell) return false;
+  state.hammerCharges -= 1;
+  state.hammerMode = false;
+  audio.cue('collect');
+  liveStatus.textContent = `已拆分${colorName(cell.color)}像素块`;
+  updateBoosterControls();
+  return true;
+}
+
+function showBoosterIntro(level) {
+  const intros = {
+    7: { icon: '⏱️', title: '解锁新道具', name: '时间冻结', description: '冻结时间 20 秒', button: '领取并继续' },
+    9: { icon: '🔨', title: '解锁新道具', name: '拆分锤', description: '把像素块拆成更小的方块', button: '领取并继续' },
+    12: { icon: '🟪', title: '解锁新功能', name: '双层方块', description: '先填满内层方块，解锁下方外层', button: '开始挑战' },
+    13: { icon: '🛸', title: '解锁新道具', name: '飞碟', description: '点击选择一个收集槽并填满它', button: '领取并继续' },
+  };
+  const intro = intros[level];
+  if (!intro) return;
+  state.introReturnStatus = state.game.status;
+  state.game.status = 'paused';
+  audio.setPaused(true);
+  dialogLayer.innerHTML = `
+    <section class="dialog-card booster-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <h1 id="dialog-title">${intro.title}</h1>
+      <div class="booster-art" aria-hidden="true">${intro.icon}</div>
+      <h2>${intro.name}</h2>
+      <p>${intro.description}</p>
+      <div class="dialog-actions"><button class="primary" type="button" data-action="begin">${intro.button}</button></div>
+    </section>`;
+  dialogLayer.hidden = false;
+  dialogLayer.querySelector('button')?.focus();
+  dialogLayer.addEventListener('click', onDialogClick);
+}
+
+function colorName(color) {
+  return ({
+    green: '绿色 ', yellow: '黄色 ', red: '红色 ', blue: '蓝色 ',
+    purple: '紫色 ', magenta: '洋红色 ', white: '白色 ', brown: '棕色 ', orange: '橙色 ',
+  })[color] ?? '';
+}
+
+function drawLevelOneSourcePanel(source) {
+  levelOneSourcePanelContext.clearRect(0, 0, 563, 756);
+  levelOneSourcePanelContext.imageSmoothingEnabled = false;
+  levelOneSourcePanelContext.drawImage(source, 0, 0, 563, 756);
+  const bottom = levelOneSourcePanelContext.getImageData(0, 750, 563, 6);
+  const alphaByRow = [255, 204, 153, 102, 51, 0];
+  for (let y = 0; y < 6; y += 1) {
+    for (let x = 0; x < 563; x += 1) {
+      const alphaOffset = (y * 563 + x) * 4 + 3;
+      bottom.data[alphaOffset] = Math.round((bottom.data[alphaOffset] * alphaByRow[y]) / 255);
+    }
+  }
+  levelOneSourcePanelContext.putImageData(bottom, 0, 750);
+  ctx.drawImage(levelOneSourcePanelCanvas, 17, 226);
+}
+
+function drawLevelOneBucketsUnderSourcePanel() {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(17, 976, 563, 78);
+  ctx.clip();
+  drawBuckets();
+  ctx.restore();
+}
+
+function drawLevelOneBrandBackground() {
+  ctx.fillStyle = gradient(0, 0, 0, SCREEN.height, [
+    [0, '#176cbb'], [0.4, '#1768ad'], [0.72, '#155793'], [1, '#092d53'],
+  ]);
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+  const glow = ctx.createRadialGradient(298, 790, 12, 298, 790, 660);
+  glow.addColorStop(0, '#55c3e8');
+  glow.addColorStop(0.32, '#39a0d5d1');
+  glow.addColorStop(1, '#0b4d8d00');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
+}
+
+function drawLevelOneBrandLine(text, y, size, colors) {
+  ctx.save();
+  ctx.translate(0, y);
+  ctx.scale(1.36, 1);
+  ctx.translate(0, -y);
+  ctx.font = `1000 ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  for (let depth = 8; depth > 0; depth -= 1) {
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = colors.deep;
+    ctx.strokeText(text, 0, y + depth);
+  }
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = colors.outline;
+  ctx.strokeText(text, 0, y);
+  const face = ctx.createLinearGradient(0, y - size / 2, 0, y + size / 2);
+  face.addColorStop(0, colors.light);
+  face.addColorStop(0.48, colors.face);
+  face.addColorStop(1, colors.shadow);
+  ctx.fillStyle = face;
+  ctx.fillText(text, 0, y);
+  ctx.restore();
+}
+
+function drawLevelOneLocalizedBrandMark(sourceTime) {
+  const progress = Math.max(0, Math.min(1, (sourceTime - 5.5) / 0.2));
+  const eased = progress < 0.5
+    ? 4 * (progress ** 3)
+    : 1 - ((-2 * progress + 2) ** 3) / 2;
+  const scale = 0.34 + eased * 0.66;
+  drawLevelOneBrandBackground();
+
+  if (sourceTime < 5.533 && levelTwoOpeningPanelImage.complete && levelTwoOpeningPanelImage.naturalWidth > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(298, 650, 174, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelTwoOpeningPanelImage, 17, 310, 563, 666);
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.translate(298, 650);
+  ctx.scale(scale, scale);
+  ctx.shadowColor = '#061a36aa';
+  ctx.shadowBlur = 22;
+  ctx.shadowOffsetY = 9;
+  ctx.beginPath();
+  ctx.arc(0, 0, 124, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(-124, -124, 124, 124, [[0, '#dbe7f2'], [0.38, '#94a7bd'], [0.72, '#e0e6ed'], [1, '#677c98']]);
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#f1f8ff';
+  ctx.stroke();
+  ctx.shadowColor = 'transparent';
+  ctx.beginPath();
+  ctx.arc(0, 0, 110, 0, Math.PI * 2);
+  const badge = ctx.createRadialGradient(-32, -48, 8, 0, 0, 112);
+  badge.addColorStop(0, '#294663');
+  badge.addColorStop(0.56, '#10273e');
+  badge.addColorStop(1, '#071827');
+  ctx.fillStyle = badge;
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#6a7f94';
+  ctx.stroke();
+
+  drawLevelOneBrandLine('像素', -80, 62, {
+    light: '#a4ff53', face: '#76e92d', shadow: '#4cac20', outline: '#326b1d', deep: '#1e5018',
+  });
+  drawLevelOneBrandLine('方块', -22, 62, {
+    light: '#ff8376', face: '#f34b40', shadow: '#cb2e27', outline: '#a32621', deep: '#712019',
+  });
+  drawLevelOneBrandLine('大闯关', 40, 42, {
+    light: '#fff7d2', face: '#ffe8a4', shadow: '#f5bd42', outline: '#bd521b', deep: '#87300e',
+  });
+  loadingVoxel(-126, -116, 43, 'purple', -0.18);
+  loadingVoxel(128, -34, 42, 'green', 0.13);
+  loadingVoxel(-151, 4, 41, 'blue', -0.1);
+  ctx.restore();
+}
+
+function redrawLevelOnePhoneHudOcclusion(now) {
+  // The source video briefly contains the iPhone volume HUD over this area.
+  // Rebuild only the covered game pixels from the live Level 1 state so a
+  // later, completed frame is not pasted over an earlier sweep milestone.
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(17, 364, 66, 220, 33);
+  ctx.clip();
+  drawGameFrame();
+  drawPixelWall();
+  drawPad();
+  drawBuckets();
+  drawParticles(now);
+  ctx.restore();
+}
+
+function drawScene(now) {
+  if (state.loading) {
+    drawLoadingScreen(now);
+    return;
+  }
+  advanceLevelOneSweep(now);
+  updateLevelOneSourcePlayback();
+  updateLevelOneTutorialPlayback();
+  advanceUfoFlight(now);
+  drawBackground();
+  drawHeader();
+  drawGameFrame();
+  const showSourceOpeningPanel = state.game.level === 1
+    && !state.game.started
+    && levelOneOpeningPanelImage.complete
+    && levelOneOpeningPanelImage.naturalWidth > 0;
+  const showLevelTwoOpeningPanel = state.game.level === 2
+    && !state.dragging
+    && state.game.moves === 0
+    && levelTwoOpeningPanelImage.complete
+    && levelTwoOpeningPanelImage.naturalWidth > 0;
+  const levelOneSourceBucket = state.game.level === 1 && state.levelOneSourceTimeline
+    ? state.game.buckets.find((bucket) => bucket.color === state.levelOneSourceTimeline.color)
+    : null;
+  const levelOneSourceProgress = levelOneSourceBucket ? getProgress(state.game, levelOneSourceBucket) : null;
+  const matchingLevelOneSourceKeyframes = levelOneSourceBucket
+    ? levelOneSourceKeyframes.filter((candidate) => candidate.color === state.levelOneSourceTimeline.color
+      && !(candidate.color === 'red' && candidate.progress === 100 && levelOneSourceVideo.currentTime > 4.67)
+      && candidate.image.complete && candidate.image.naturalWidth > 0)
+    : [];
+  const levelOneSourceKeyframe = matchingLevelOneSourceKeyframes.find((candidate) => candidate.progress === levelOneSourceProgress)
+    ?? matchingLevelOneSourceKeyframes.find((candidate) => Math.abs(candidate.progress - levelOneSourceProgress) <= 1);
+  const showSourceActionPanel = state.game.level === 1
+    && state.levelOneSourceTimeline
+    && (levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || levelOneSourceKeyframe);
+  const showLevelOneBrandPrelude = showSourceActionPanel
+    && state.levelOneSourceTimeline.color === 'red'
+    && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    && levelOneSourceVideo.currentTime >= 5.5;
+  if (showLevelOneBrandPrelude) {
+    drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
+  } else if (showSourceActionPanel) {
+    const hasRecordedVolumeHud = state.levelOneSourceTimeline.color === 'green'
+      && (levelOneSourceKeyframe ? levelOneSourceKeyframe.progress <= 85 : levelOneSourceVideo.currentTime >= 3.2 && levelOneSourceVideo.currentTime <= 3.8);
+    drawLevelOneBucketsUnderSourcePanel();
+    if (levelOneSourceKeyframe) drawLevelOneSourcePanel(levelOneSourceKeyframe.image);
+    else drawLevelOneSourcePanel(levelOneSourceVideo);
+    if (hasRecordedVolumeHud) redrawLevelOnePhoneHudOcclusion(now);
+  } else if (showSourceOpeningPanel) {
+    const tutorialPanelSource = !prefersReducedMotion.matches
+      && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ? levelOneTutorialVideo
+      : levelOneOpeningPanelImage;
+    drawLevelOneBucketsUnderSourcePanel();
+    drawLevelOneSourcePanel(tutorialPanelSource);
+  } else if (showLevelTwoOpeningPanel) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelTwoOpeningPanelImage, 17, 310);
+    ctx.restore();
+  } else {
+    drawPixelWall();
+    drawPad();
+    drawBuckets();
+  }
+  drawFlyingSaucer(now);
+  if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
+  if (state.game.status === 'tutorial') drawTutorialCard(now);
+  if (!showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
+  if (!showSourceActionPanel) drawParticles(now);
+
+  if (state.game.invalidAt && now - state.game.invalidAt.at < 520) {
+    const life = 1 - (now - state.game.invalidAt.at) / 520;
+    ctx.save();
+    ctx.globalAlpha = life;
+    ctx.strokeStyle = '#ff4558';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(state.game.invalidAt.x, state.game.invalidAt.y, 20 + (1 - life) * 24, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawTubeLabels() {
+  const { labelY = 1081, width = 78 } = state.game.config.pipeTrack ?? {};
+  for (const x of state.game.config.pipeChannels) {
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    roundedRect(x + (width - 34) / 2, labelY, 34, 15, 7);
+    ctx.fillStyle = '#163f70';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function mapPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * SCREEN.width,
+    y: ((event.clientY - rect.top) / rect.height) * SCREEN.height,
+  };
+}
+
+function clampBucketPosition(bucket, x, y) {
+  const frame = state.game.config.frame;
+  const inset = 8;
+  const topAllowance = state.game.config.dragTopAllowance ?? 0;
+  return {
+    x: Math.max(frame.x + inset, Math.min(frame.x + frame.width - inset - bucket.width, x)),
+    y: Math.max(frame.y + inset - topAllowance, Math.min(frame.y + frame.height - inset - bucket.height, y)),
+  };
+}
+
+function onPointerDown(event) {
+  if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
+  const point = mapPointer(event);
+  if (state.ufoMode) {
+    const selected = getBucketAt(state.game, point.x, point.y);
+    if (activateSelectedBucket(selected, performance.now())) {
+      event.preventDefault();
+      if (state.game.status === 'won') showEndDialog();
+      return;
+    }
+  }
+  if (state.hammerMode) {
+    if (maybeSplitPixel(point)) {
+      event.preventDefault();
+      return;
+    }
+  }
+  const bucket = getBucketAt(state.game, point.x, point.y);
+  if (!bucket) return;
+  event.preventDefault();
+  canvas.setPointerCapture(event.pointerId);
+  if (state.game.level === 1) audio.setSourceMixMode(true);
+  void audio.startFromGesture();
+  state.dragging = true;
+  state.lastPoint = point;
+  state.dragOrigin = { x: bucket.x, y: bucket.y };
+  state.dragOffset = { x: point.x - bucket.x, y: point.y - bucket.y };
+  state.dragDistance = 0;
+  state.moveCollected = 0;
+  state.game.activeBucketId = bucket.id;
+  state.game.invalidAt = null;
+  if (state.game.level === 1) prepareLevelOneSourceSegment(bucket.color);
+}
+
+function onPointerMove(event) {
+  if (!state.dragging) return;
+  event.preventDefault();
+  const point = mapPointer(event);
+  const delta = Math.hypot(point.x - state.lastPoint.x, point.y - state.lastPoint.y);
+  state.dragDistance += delta;
+  const bucket = getBucket(state.game, state.game.activeBucketId);
+  if (!bucket) return;
+
+  if (state.dragDistance >= 4 && !state.game.started) {
+    state.game.started = true;
+    if (state.game.status === 'tutorial') state.game.status = 'playing';
+    audio.cue('drag');
+  }
+  if (state.dragDistance >= 2) {
+    const next = clampBucketPosition(bucket, point.x - state.dragOffset.x, point.y - state.dragOffset.y);
+    if (state.game.level === 1) {
+      const wallBottom = state.game.gridRect.y + state.game.gridRect.height;
+      bucket.x = next.x;
+      bucket.y = bucket.sweep ? Math.max(next.y, wallBottom + 9) : next.y;
+      if (!bucket.sweep && bucket.y <= wallBottom + 64) startLevelOneSweep(bucket, performance.now());
+    } else {
+      const cells = collectAlongPath(state.game, bucket.id, { x: bucket.x, y: bucket.y }, next);
+      addCollectedEffects(cells, performance.now(), bucket);
+    }
+  }
+  state.lastPoint = point;
+}
+
+function closeDialog() {
+  dialogLayer.hidden = true;
+  dialogLayer.classList.remove('reward-overlay', 'transition-overlay');
+  delete dialogLayer.dataset.transitionStartedAt;
+  dialogLayer.replaceChildren();
+}
+
+function restartCurrentLevel() {
+  if (state.transitionTimer) globalThis.clearTimeout(state.transitionTimer);
+  state.transitionTimer = null;
+  levelOneSourceVideo.pause();
+  levelOneSourceAudio.pause();
+  audio.setSourceMixMode(false);
+  state.levelOneSourceTimeline = null;
+  state.levelOneWonPending = false;
+  state.game = createGameState(state.game.level);
+  state.endDialogShown = false;
+  state.dragging = false;
+  state.lastPoint = null;
+  state.dragOrigin = null;
+  state.dragOffset = null;
+  state.dragDistance = 0;
+  closeDialog();
+  audio.cue('button');
+  liveStatus.textContent = `第 ${state.game.level} 关已重新开始`;
+}
+
+function advanceToNextLevel() {
+  if (state.transitionTimer) globalThis.clearTimeout(state.transitionTimer);
+  state.transitionTimer = null;
+  levelOneSourceVideo.pause();
+  levelOneSourceAudio.pause();
+  audio.setSourceMixMode(false);
+  state.levelOneSourceTimeline = null;
+  state.levelOneWonPending = false;
+  state.game = startNextLevel(state.game);
+  state.endDialogShown = false;
+  state.lastStatus = state.game.status;
+  if (state.game.level === 7) state.freezeCharges = 2;
+  if (state.game.level === 9) state.hammerCharges = 2;
+  if (state.game.level === 13) state.ufoCharges = 2;
+  state.hammerMode = false;
+  state.ufoMode = false;
+  closeDialog();
+  audio.setPaused(false);
+  liveStatus.textContent = `第 ${state.game.level} 关开始`;
+  updateBoosterControls();
+  showBoosterIntro(state.game.level);
+}
+
+function showSettings() {
+  if (!dialogLayer.hidden) return;
+  state.settingsReturnStatus = state.game.status;
+  if (state.game.status === 'playing') state.game.status = 'paused';
+  state.game.activeBucketId = null;
+  state.dragging = false;
+  audio.setPaused(true);
+  updateLevelOneSourcePlayback();
+
+  dialogLayer.innerHTML = `
+    <section class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <h1 id="dialog-title">游戏设置</h1>
+      <div class="setting-row"><span>背景音乐</span><button type="button" data-toggle="music" aria-pressed="${audio.musicEnabled}">${audio.musicEnabled ? '开启' : '关闭'}</button></div>
+      <div class="setting-row"><span>游戏音效</span><button type="button" data-toggle="effects" aria-pressed="${audio.effectsEnabled}">${audio.effectsEnabled ? '开启' : '关闭'}</button></div>
+      <div class="dialog-actions">
+        <button class="primary" type="button" data-action="continue">继续游戏</button>
+        <button class="secondary" type="button" data-action="restart">重新开始</button>
+      </div>
+    </section>`;
+  dialogLayer.hidden = false;
+  dialogLayer.querySelector('[data-action="continue"]').focus();
+  dialogLayer.addEventListener('click', onDialogClick, { once: false });
+}
+
+function showEndDialog() {
+  if (state.endDialogShown) return;
+  state.endDialogShown = true;
+  const won = state.game.status === 'won';
+  const useRecordedLevelOneWin = won && state.game.level === 1 && audio.isUsingSourceMix();
+  if (!useRecordedLevelOneWin) audio.cue(won ? 'win' : 'lose');
+  audio.setPaused(true);
+  if (won) {
+    if (useRecordedLevelOneWin) {
+      levelOneSourceAudio.pause();
+      levelOneSourceAudio.currentTime = LEVEL_ONE_SOURCE_SEGMENTS.red.end;
+      void levelOneSourceAudio.play().catch(() => {});
+    }
+    if (state.game.level === 9) showFeatureReward();
+    else showLevelTransition();
+    return;
+  }
+  dialogLayer.classList.remove('reward-overlay', 'transition-overlay');
+  dialogLayer.innerHTML = `
+    <section class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <h1 id="dialog-title">时间到啦</h1>
+      <p>再试一次，把像素全部收集起来。</p>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-action="restart">重新开始</button>
+      </div>
+    </section>`;
+  dialogLayer.hidden = false;
+  dialogLayer.querySelector('button')?.focus();
+  dialogLayer.addEventListener('click', onDialogClick, { once: false });
+}
+
+function showLevelTransition() {
+  const nextLevel = state.game.level + 1;
+  dialogLayer.classList.add('transition-overlay');
+  dialogLayer.dataset.transitionStartedAt = String(performance.now());
+  dialogLayer.innerHTML = `
+    <section class="level-transition" role="status" aria-live="polite" aria-label="正在进入第 ${nextLevel} 关">
+      <div class="transition-next-preview" aria-hidden="true"><img src="/assets/level2/level2-opening-panel.png" alt=""></div>
+      <div class="transition-ring" aria-hidden="true"></div>
+      <i class="transition-cube cube-purple" aria-hidden="true"></i>
+      <i class="transition-cube cube-blue" aria-hidden="true"></i>
+      <i class="transition-cube cube-green" aria-hidden="true"></i>
+      <h1 class="transition-logo" aria-hidden="true"><span>像素</span><span>方块</span><span>大闯关</span></h1>
+    </section>`;
+  dialogLayer.hidden = false;
+  state.transitionTimer = globalThis.setTimeout(advanceToNextLevel, 650);
+}
+
+function showFeatureReward() {
+  const colors = ['#ffeb3b', '#62f324', '#20d4ff', '#ff3ca6', '#ff7f1f', '#a876ff'];
+  const confetti = Array.from({ length: 42 }, (_, index) => {
+    const left = (index * 47 + 9) % 100;
+    const delay = ((index * 29) % 38) / 10;
+    const duration = 2.8 + ((index * 17) % 24) / 10;
+    const drift = ((index * 31) % 150) - 75;
+    const width = 5 + ((index * 13) % 8);
+    const height = 11 + ((index * 19) % 15);
+    const color = colors[index % colors.length];
+    return `<i class="reward-confetti-piece" aria-hidden="true" style="--x:${left}%;--delay:${delay}s;--duration:${duration}s;--drift:${drift}px;--width:${width}px;--height:${height}px;--color:${color}"></i>`;
+  }).join('');
+  dialogLayer.classList.add('reward-overlay');
+  dialogLayer.innerHTML = `
+    <section class="reward-screen" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="reward-confetti" aria-hidden="true">${confetti}</div>
+      <h1 class="reward-title" id="dialog-title">做得好！</h1>
+      <p class="reward-feature-label">下一项功能</p>
+      <div class="reward-meter" role="progressbar" aria-label="功能解锁进度 78%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="78">
+        <div class="reward-meter-rim"><div class="reward-meter-fill"></div></div>
+        <div class="reward-meter-base"><strong>78%</strong></div>
+      </div>
+      <p class="reward-unlock-text">到达第 12 关！</p>
+      <button class="reward-claim" type="button" data-action="next">
+        <span class="reward-coin" aria-hidden="true">★</span><strong>20</strong><span class="reward-claim-label">领取并继续</span>
+      </button>
+    </section>`;
+  dialogLayer.hidden = false;
+  dialogLayer.querySelector('button')?.focus();
+  dialogLayer.addEventListener('click', onDialogClick, { once: false });
+  const meter = dialogLayer.querySelector('.reward-meter');
+  const fill = dialogLayer.querySelector('.reward-meter-fill');
+  const label = dialogLayer.querySelector('.reward-meter-base strong');
+  const startAt = performance.now();
+  const duration = prefersReducedMotion.matches ? 0 : 600;
+  const animateProgress = (now) => {
+    if (!dialogLayer.classList.contains('reward-overlay')) return;
+    const fraction = duration === 0 ? 1 : Math.min(1, (now - startAt) / duration);
+    const eased = 1 - ((1 - fraction) ** 2);
+    const value = Math.round(78 + (83 - 78) * eased);
+    fill.style.transform = `scaleX(${value / 100})`;
+    label.textContent = `${value}%`;
+    meter.setAttribute('aria-valuenow', String(value));
+    meter.setAttribute('aria-label', `功能解锁进度 ${value}%`);
+    if (fraction < 1) requestAnimationFrame(animateProgress);
+  };
+  requestAnimationFrame(animateProgress);
+}
+
+function onDialogClick(event) {
+  const toggle = event.target.closest('[data-toggle]');
+  if (toggle) {
+    const enabled = toggle.getAttribute('aria-pressed') !== 'true';
+    const setting = toggle.dataset.toggle;
+    if (setting === 'music') audio.setMusic(enabled);
+    else audio.setEffects(enabled);
+    toggle.setAttribute('aria-pressed', String(enabled));
+    toggle.textContent = enabled ? '开启' : '关闭';
+    audio.cue('button');
+    return;
+  }
+
+  const action = event.target.closest('[data-action]')?.dataset.action;
+  if (!action) return;
+  audio.cue('button');
+  if (action === 'continue') {
+    state.game.status = state.settingsReturnStatus === 'paused'
+      ? (state.game.started ? 'playing' : 'tutorial')
+      : state.settingsReturnStatus;
+    closeDialog();
+    audio.setPaused(false);
+  } else if (action === 'begin') {
+    state.game.status = state.introReturnStatus === 'paused' ? 'playing' : state.introReturnStatus;
+    closeDialog();
+    audio.setPaused(false);
+  } else if (action === 'restart') {
+    restartCurrentLevel();
+    audio.setPaused(false);
+  } else if (action === 'next') {
+    advanceToNextLevel();
+  }
+}
+
+function onPointerUp(event) {
+  if (!state.dragging) return;
+  event.preventDefault();
+  const point = mapPointer(event);
+  const bucket = getBucket(state.game, state.game.activeBucketId);
+  if (bucket && state.dragDistance > 5) {
+    if (state.moveCollected === 0 && state.game.status !== 'won') {
+      bucket.x = state.dragOrigin.x;
+      bucket.y = state.dragOrigin.y;
+      state.game.invalidAt = { ...point, at: performance.now() };
+      audio.cue('invalid');
+      liveStatus.textContent = `没有收集到${colorName(bucket.color)}像素块，试着拖过同色区域`;
+    } else if (getProgress(state.game, bucket.id) >= 100) {
+      bucket.completeAt = performance.now();
+    }
+  }
+  state.dragging = false;
+  state.lastPoint = null;
+  state.dragOrigin = null;
+  state.dragOffset = null;
+  state.dragDistance = 0;
+  state.game.activeBucketId = null;
+  state.game.moves += state.moveCollected > 0 ? 1 : 0;
+  if (state.game.status === 'won') showEndDialog();
+}
+
+canvas.addEventListener('pointerdown', onPointerDown);
+canvas.addEventListener('pointermove', onPointerMove);
+canvas.addEventListener('pointerup', onPointerUp);
+canvas.addEventListener('pointercancel', onPointerUp);
+boosterControls.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-booster]');
+  if (button) activateBooster(button.dataset.booster);
+});
+settingsButton.addEventListener('click', () => {
+  if (state.loading) return;
+  void audio.startFromGesture();
+  audio.cue('button');
+  showSettings();
+});
+
+document.addEventListener('visibilitychange', () => {
+  state.lastFrameAt = performance.now();
+  audio.setPaused(document.hidden || state.game.status === 'paused');
+  updateLevelOneSourcePlayback();
+  updateLevelOneTutorialPlayback();
+});
+
+function setCanvasDensity() {
+  const ratio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  canvas.width = Math.round(SCREEN.width * ratio);
+  canvas.height = Math.round(SCREEN.height * ratio);
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function frame(now) {
+  const delta = Math.min(0.05, Math.max(0, (now - state.lastFrameAt) / 1000));
+  state.lastFrameAt = now;
+  if (state.loading && !state.loadingPreview && now - state.loadingStartedAt >= 1800) {
+    state.loading = false;
+    liveStatus.textContent = `第 ${initialLevel} 关开始`;
+    canvas.setAttribute('aria-label', '拖动收集槽收集彩色像素方块');
+    settingsButton.hidden = false;
+    state.lastFrameAt = now;
+  }
+  if (!document.hidden && !state.loading) updateClock(state.game, delta);
+  for (const bucket of state.game.buckets) {
+    if (bucket.completeAt && state.game.activeBucketId !== bucket.id && now - bucket.completeAt > 480) {
+      bucket.visible = false;
+    }
+  }
+  drawScene(now);
+  updateBoosterControls();
+
+  if (state.game.status !== state.lastStatus) {
+    if (state.game.status === 'won' || state.game.status === 'lost') showEndDialog();
+    state.lastStatus = state.game.status;
+  }
+  requestAnimationFrame(frame);
+}
+
+setCanvasDensity();
+window.addEventListener('resize', setCanvasDensity);
+if (state.loading) {
+  liveStatus.textContent = '正在加载游戏';
+  canvas.setAttribute('aria-label', '正在加载游戏');
+  settingsButton.hidden = true;
+} else {
+  canvas.setAttribute('aria-label', '拖动收集槽收集彩色像素方块');
+  if (initialLevel !== 1) liveStatus.textContent = `第 ${initialLevel} 关开始`;
+}
+updateBoosterControls();
+if (requestedPreviewReward && initialLevel === 9) {
+  state.game.grid = state.game.grid.map(() => null);
+  state.game.timeRemaining = 138;
+  for (const bucket of state.game.buckets) bucket.visible = false;
+  state.game.status = 'won';
+  state.lastStatus = 'won';
+  showEndDialog();
+}
+drawScene(performance.now());
+requestAnimationFrame(frame);
