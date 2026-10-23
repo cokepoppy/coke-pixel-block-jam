@@ -130,7 +130,7 @@ async function drag(page, fromX, fromY, toX, toY) {
 
 async function installLevelOneMotionProbe(page) {
   await page.addInitScript(() => {
-    window.__pbjMotionProbe = { bucketDraws: [], pointerMoves: [], sourceStarts: [] };
+    window.__pbjMotionProbe = { bucketDraws: [], pointerMoves: [], pointerDownAt: null, sourceStarts: [] };
     const prototype = CanvasRenderingContext2D.prototype;
     const originalTranslate = prototype.translate;
     const originalScale = prototype.scale;
@@ -151,6 +151,9 @@ async function installLevelOneMotionProbe(page) {
     };
     document.addEventListener('pointermove', (event) => {
       window.__pbjMotionProbe.pointerMoves.push({ at: performance.now(), x: event.clientX, y: event.clientY });
+    }, true);
+    document.addEventListener('pointerdown', () => {
+      window.__pbjMotionProbe.pointerDownAt = performance.now();
     }, true);
 
     const watchVideo = () => {
@@ -335,21 +338,32 @@ test('Level 1 黄色槽按真实指针节奏连续上移，扫墙从对应源帧
   expect(motionFrames.length, 'the bucket should travel across multiple rendered frames before reaching the wall')
     .toBeGreaterThan(12);
   let largestFrameStep = 0;
-  let largestFrameGapMs = 0;
+  let largestFrameGap = { ms: 0, before: null, after: null };
   for (let index = 1; index < motionFrames.length; index += 1) {
     const step = motionFrames[index - 1].y - motionFrames[index].y;
     const frameGapMs = motionFrames[index].at - motionFrames[index - 1].at;
     expect(step, 'the bucket should move toward the wall without reversing').toBeGreaterThanOrEqual(-1.5);
     largestFrameStep = Math.max(largestFrameStep, step);
-    largestFrameGapMs = Math.max(largestFrameGapMs, frameGapMs);
+    if (frameGapMs > largestFrameGap.ms) {
+      largestFrameGap = { ms: frameGapMs, before: motionFrames[index - 1], after: motionFrames[index] };
+    }
   }
+  const gestureMoves = probe.pointerMoves.filter(({ at }) => at >= probe.pointerDownAt);
+  const largestPointerGapMs = Math.max(0, ...gestureMoves.slice(1).map((move, index) => move.at - gestureMoves[index].at));
   expect(largestFrameStep, 'no rendered frame should skip a large section of the drag').toBeLessThan(35);
-  expect(largestFrameGapMs, 'the browser should repaint the moving bucket without multi-frame stalls').toBeLessThan(67);
+  expect(largestFrameGap.ms, 'the browser should repaint the moving bucket without multi-frame stalls').toBeLessThan(67);
+  expect(largestFrameGap.ms - largestPointerGapMs, 'Canvas repaint delay should track the browser input cadence')
+    .toBeLessThan(20);
   const motionReport = {
     inputPointerMoves: probe.pointerMoves.length,
     renderedMotionFrames: motionFrames.length,
     largestFrameStepPx: Number(largestFrameStep.toFixed(2)),
-    largestFrameGapMs: Number(largestFrameGapMs.toFixed(2)),
+    largestFrameGapMs: Number(largestFrameGap.ms.toFixed(2)),
+    largestFrameGap: largestFrameGap.before && {
+      before: { at: Number(largestFrameGap.before.at.toFixed(1)), y: Number(largestFrameGap.before.y.toFixed(2)) },
+      after: { at: Number(largestFrameGap.after.at.toFixed(1)), y: Number(largestFrameGap.after.y.toFixed(2)) },
+    },
+    largestPointerGapMs: Number(largestPointerGapMs.toFixed(2)),
     firstSourceFrameSeconds: Number(probe.sourceStarts[0].time.toFixed(3)),
     motionFrames: motionFrames.map(({ at, y }) => ({ at: Number(at.toFixed(1)), y: Number(y.toFixed(2)) })),
   };
@@ -362,6 +376,8 @@ test('Level 1 黄色槽按真实指针节奏连续上移，扫墙从对应源帧
     renderedMotionFrames: motionReport.renderedMotionFrames,
     largestFrameStepPx: motionReport.largestFrameStepPx,
     largestFrameGapMs: motionReport.largestFrameGapMs,
+    largestPointerGapMs: motionReport.largestPointerGapMs,
+    largestFrameGap: motionReport.largestFrameGap,
     firstSourceFrameSeconds: motionReport.firstSourceFrameSeconds,
   })}`);
 });
