@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 import { createGameState } from '../src/game.js';
 
-const levelOneOpeningBlendStart = 696;
+const levelOneOpeningBlendStart = 744;
+const levelOneActionBlendStart = 744;
 const levelTwoTransitionSource = JSON.parse(await readFile(
   new URL('./fixtures/level2-transition-source.json', import.meta.url),
   'utf8',
@@ -23,7 +24,7 @@ const levelOneSettingsGearPixels = await sharp(fileURLToPath(new URL('../assets/
   .raw()
   .toBuffer({ resolveWithObject: true });
 const levelOneOpeningPanelPixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-opening-panel.png', import.meta.url)))
-  .extract({ left: 0, top: 0, width: 563, height: 696 })
+  .extract({ left: 0, top: 0, width: 563, height: 744 })
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true });
@@ -1139,7 +1140,7 @@ test('Level 1 开局棋盘和底框连续贴合录屏裁切', async ({ page }, t
   });
   expect(gearDiff, `Level 1 settings gear differs at ${gearDiff} of 4356 pixels`).toBe(0);
   const panel = await sharp(screenshot)
-    .extract({ left: 17, top: 226, width: 563, height: 696 })
+    .extract({ left: 17, top: 226, width: 563, height: 744 })
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
@@ -1381,16 +1382,16 @@ test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async 
       threshold: 0.12,
       includeAA: false,
     });
-    const topBytes = 564 * levelOneOpeningBlendStart * 4;
+    const topBytes = 564 * levelOneActionBlendStart * 4;
     const topDiffPixels = pixelmatch(
       source.data.subarray(0, topBytes),
       game.data.subarray(0, topBytes),
       Buffer.alloc(topBytes),
       564,
-      levelOneOpeningBlendStart,
+      levelOneActionBlendStart,
       { threshold: 0.12, includeAA: false },
     );
-    const bottomHeight = 756 - levelOneOpeningBlendStart;
+    const bottomHeight = 756 - levelOneActionBlendStart;
     const bottomDiffPixels = pixelmatch(
       source.data.subarray(topBytes),
       game.data.subarray(topBytes),
@@ -1409,7 +1410,7 @@ test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async 
       target: capture.target,
       sourceTime: capture.sourceTime,
       differentPixelRatio: diffPixels / (564 * 756),
-      topDifferentPixelRatio: topDiffPixels / (564 * levelOneOpeningBlendStart),
+      topDifferentPixelRatio: topDiffPixels / (564 * levelOneActionBlendStart),
       bottomDifferentPixelRatio: bottomDiffPixels / (564 * bottomHeight),
       meanAbsoluteColorError: absoluteColorDifference / (564 * 756 * 3),
     });
@@ -1478,7 +1479,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   await startLevelOneSourceBoardFrameProbe(page, 3.0, 4.0);
   await drag(page, 111, 866, 111, 620);
   await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 25%', { timeout: 1_500 });
-  await expect.poll(() => page.locator('audio').evaluate((audio) => (
+  await expect.poll(() => page.locator('#level-one-source-audio').evaluate((audio) => (
     audio.currentSrc.endsWith('/assets/level1/level1-source-audio.m4a')
       && !audio.paused
       && audio.currentTime >= 2.5
@@ -1547,23 +1548,23 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
 test('Level 1 设置页暂停并从同一进度继续原画与原声', async ({ page }) => {
   await drag(page, 298, 866, 298, 620);
   await expect(page.locator('#live-status')).toContainText('进度 6%', { timeout: 1_500 });
-  const sourceTime = await page.locator('audio').evaluate((audio) => audio.currentTime);
+  const sourceTime = await page.locator('#level-one-source-audio').evaluate((audio) => audio.currentTime);
 
   await page.getByRole('button', { name: '打开设置' }).click();
-  await expect.poll(() => page.locator('audio').evaluate((audio) => audio.paused)).toBeTruthy();
+  await expect.poll(() => page.locator('#level-one-source-audio').evaluate((audio) => audio.paused)).toBeTruthy();
   await expect.poll(() => page.locator('#level-one-source-video').evaluate((video) => video.paused)).toBeTruthy();
   await page.waitForTimeout(250);
-  const pausedTime = await page.locator('audio').evaluate((audio) => audio.currentTime);
+  const pausedTime = await page.locator('#level-one-source-audio').evaluate((audio) => audio.currentTime);
   expect(Math.abs(pausedTime - sourceTime)).toBeLessThan(0.04);
   await page.getByRole('dialog', { name: '游戏设置' }).locator('[data-toggle="effects"]').click();
 
   await page.getByRole('dialog', { name: '游戏设置' }).getByRole('button', { name: '继续游戏' }).click();
-  await expect.poll(() => page.locator('audio').evaluate((audio) => audio.paused)).toBeTruthy();
+  await expect.poll(() => page.locator('#level-one-source-audio').evaluate((audio) => audio.paused)).toBeTruthy();
   await expect(page.locator('#live-status')).toContainText('进度 36%', { timeout: 2_000 });
   await page.getByRole('button', { name: '打开设置' }).click();
   await page.getByRole('dialog', { name: '游戏设置' }).locator('[data-toggle="effects"]').click();
   await page.getByRole('dialog', { name: '游戏设置' }).getByRole('button', { name: '继续游戏' }).click();
-  await expect.poll(() => page.locator('audio').evaluate((audio) => !audio.paused)).toBeTruthy();
+  await expect.poll(() => page.locator('#level-one-source-audio').evaluate((audio) => !audio.paused)).toBeTruthy();
 });
 
 test('Level 1 黄色槽满格停在原作终帧且帧循环保持运行', async ({ page }) => {
@@ -2208,6 +2209,24 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
     window.__levelTwoDropStatuses = [];
     window.__levelTwoSourceFrameCaptures = {};
     const sourceVideo = document.querySelector('#level-two-source-gameplay-video');
+    const sourceAudio = document.querySelector('#level-two-source-audio');
+    window.__levelTwoAudioSamples = [];
+    const sampleSourceAudio = () => {
+      const transition = document.querySelector('#dialog-layer[data-transition-profile="level2-source"]');
+      window.__levelTwoAudioSamples.push({
+        at: performance.now(),
+        videoTime: sourceVideo.currentTime,
+        videoPaused: sourceVideo.paused,
+        videoSeeking: sourceVideo.seeking,
+        audioTime: sourceAudio.currentTime,
+        audioPaused: sourceAudio.paused,
+        audioSeeking: sourceAudio.seeking,
+        audioMuted: sourceAudio.muted,
+        inTransition: Boolean(transition),
+      });
+      requestAnimationFrame(sampleSourceAudio);
+    };
+    requestAnimationFrame(sampleSourceAudio);
     const frameCanvas = document.querySelector('#game-canvas');
     const playSourceVideo = sourceVideo.play.bind(sourceVideo);
     const alignedFrames = new Set([163, 229, 295, 331, 355, 391, 427, 457]);
@@ -2298,6 +2317,10 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
   // Keep the movement and the subsequent wait as separate real pointer phases.
   await dragThroughAt60Hz(page, 450, 750, [{ x: 450, y: 550, durationMs: 100 }]);
   const redGestureStartedAt = await page.evaluate(() => window.__levelTwoGestureStarts[0]);
+  await expect.poll(() => page.locator('#level-two-source-audio').evaluate((audio) => (
+    !audio.paused && !audio.muted && audio.currentTime > 0.1
+  )), { message: 'the original Level 2 mixed track should unlock and follow the first valid red gesture' })
+    .toBeTruthy();
   await waitUntilPageTime(redGestureStartedAt + 2_375);
 
   // Green rises to the source y493 position shown at its first collection frame.
@@ -2436,6 +2459,11 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
     }
   }
   const panelRoi = { left: 17, top: 310, width: 563, height: 666 };
+  const levelTwoFrameEvidenceDirectory = fileURLToPath(new URL(
+    '../.research/events/level2-real-input-frame-audit',
+    import.meta.url,
+  ));
+  await mkdir(levelTwoFrameEvidenceDirectory, { recursive: true });
   for (const comparison of sourceFrameComparisons) {
     const sourceTime = levelTwoCollectionSource.frameTimeOriginSeconds + comparison.sourceWallTime;
     const comparedFrame = Math.round(
@@ -2449,7 +2477,8 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
     ));
     const source = await sharp(sourcePath).ensureAlpha().raw().toBuffer();
     const canvas = await sharp(comparison.canvasPath).extract(panelRoi).ensureAlpha().raw().toBuffer();
-    const differentPixels = pixelmatch(source, canvas, Buffer.alloc(canvas.length), panelRoi.width, panelRoi.height, {
+    const diffPixels = Buffer.alloc(canvas.length);
+    const differentPixels = pixelmatch(source, canvas, diffPixels, panelRoi.width, panelRoi.height, {
       threshold: 0.12,
       includeAA: false,
     });
@@ -2466,16 +2495,59 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
     comparison.differentPixelRatio = differentPixels / (panelRoi.width * panelRoi.height);
     comparison.wallDifferentPixels = wallDifferentPixels;
     comparison.wallDifferentPixelRatio = wallDifferentPixels / (478 * 176);
+    const frameLabel = `frame-${String(comparison.sourceFrame).padStart(4, '0')}`;
+    const sourceEvidencePath = `${levelTwoFrameEvidenceDirectory}/${frameLabel}-source.png`;
+    const browserEvidencePath = `${levelTwoFrameEvidenceDirectory}/${frameLabel}-browser.png`;
+    const diffEvidencePath = `${levelTwoFrameEvidenceDirectory}/${frameLabel}-diff.png`;
+    await copyFile(sourcePath, sourceEvidencePath);
+    await sharp(comparison.canvasPath).extract(panelRoi).png().toFile(browserEvidencePath);
+    await sharp(diffPixels, {
+      raw: { width: panelRoi.width, height: panelRoi.height, channels: 4 },
+    }).png().toFile(diffEvidencePath);
+    comparison.evidence = {
+      source: sourceEvidencePath,
+      browser: browserEvidencePath,
+      diff: diffEvidencePath,
+    };
     delete comparison.canvasPath;
   }
-  await writeFile(testInfo.outputPath('level2-collection-frame-comparison.json'), `${JSON.stringify({
+  const levelTwoFrameAlignment = {
     source: levelTwoCollectionSource.source,
     sourceTimingReference: sourceStartTime,
     actualGestureStarts: gestureStart,
     progressComparisons,
     sourceFrameComparisons,
     sourceSamples: progressHistory,
-  }, null, 2)}\n`);
+  };
+  const levelTwoFrameReport = `${JSON.stringify(levelTwoFrameAlignment, null, 2)}\n`;
+  const testFrameReportPath = testInfo.outputPath('level2-collection-frame-comparison.json');
+  await writeFile(testFrameReportPath, levelTwoFrameReport);
+  await writeFile(`${levelTwoFrameEvidenceDirectory}/report.json`, levelTwoFrameReport);
+  const contactLayers = [];
+  for (const [index, comparison] of sourceFrameComparisons.entries()) {
+    const row = Math.floor(index / 2);
+    const column = index % 2;
+    const left = column * panelRoi.width * 2;
+    const top = row * panelRoi.height;
+    contactLayers.push(
+      { input: comparison.evidence.source, left, top },
+      { input: comparison.evidence.browser, left: left + panelRoi.width, top },
+    );
+  }
+  await sharp({
+    create: {
+      width: panelRoi.width * 4,
+      height: panelRoi.height * 4,
+      channels: 4,
+      background: { r: 20, g: 25, b: 35, alpha: 1 },
+    },
+  }).composite(contactLayers).jpeg({ quality: 88 }).toFile(
+    `${levelTwoFrameEvidenceDirectory}/source-browser-contact-sheet.jpg`,
+  );
+  await testInfo.attach('level2-collection-frame-comparison.json', {
+    path: testFrameReportPath,
+    contentType: 'application/json',
+  });
   await testInfo.attach('level2-collection-frame-comparison.json', {
     body: Buffer.from(JSON.stringify({ progressComparisons, sourceFrameComparisons }, null, 2)),
     contentType: 'application/json',
@@ -2615,9 +2687,79 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
   expect(maxRevealRadiusError, 'circular reveal should follow every measured source frame').toBeLessThanOrEqual(0.1);
   await expect(page.getByRole('status', { name: '正在进入第 3 关' })).toBeVisible();
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 1_500 });
+  const levelTwoAudioReport = await page.evaluate(() => {
+    const samples = window.__levelTwoAudioSamples;
+    const syncSamples = samples.filter((sample) => (
+      sample.videoTime >= 0.35 && sample.videoTime <= 8.4
+      && !sample.videoPaused && !sample.videoSeeking
+      && !sample.audioPaused && !sample.audioSeeking && !sample.audioMuted
+    ));
+    const drifts = syncSamples.map(({ videoTime, audioTime }) => Math.abs(audioTime - videoTime) * 1_000)
+      .sort((left, right) => left - right);
+    const transitionSamples = samples.filter((sample) => (
+      sample.inTransition && sample.audioTime >= 8.5 && !sample.audioPaused && !sample.audioMuted
+    ));
+    const audio = document.querySelector('#level-two-source-audio');
+    return {
+      pairedSampleCount: syncSamples.length,
+      p95AbsoluteDriftMs: drifts[Math.min(drifts.length - 1, Math.floor(drifts.length * 0.95))] ?? null,
+      maxAbsoluteDriftMs: drifts.at(-1) ?? null,
+      transitionSampleCount: transitionSamples.length,
+      lastTransitionAudioTime: transitionSamples.at(-1)?.audioTime ?? null,
+      stoppedOnLevelThree: audio.paused && audio.muted && audio.currentTime === 0,
+      samples,
+    };
+  });
+  const audioReportPath = testInfo.outputPath('level2-source-audio-alignment.json');
+  await writeFile(audioReportPath, `${JSON.stringify(levelTwoAudioReport, null, 2)}\n`);
+  await testInfo.attach('level2-source-audio-alignment.json', {
+    path: audioReportPath,
+    contentType: 'application/json',
+  });
+  const evidenceDirectory = fileURLToPath(new URL('../.research/events/', import.meta.url));
+  await mkdir(evidenceDirectory, { recursive: true });
+  await writeFile(`${evidenceDirectory}/level2-source-audio-alignment.json`, `${JSON.stringify(levelTwoAudioReport, null, 2)}\n`);
+  console.log(`Level 2 source audio sync: ${levelTwoAudioReport.pairedSampleCount} paired samples, p95 ${levelTwoAudioReport.p95AbsoluteDriftMs.toFixed(1)} ms, max ${levelTwoAudioReport.maxAbsoluteDriftMs.toFixed(1)} ms, ${levelTwoAudioReport.transitionSampleCount} transition samples`);
+  expect(levelTwoAudioReport.pairedSampleCount, 'source audio and video should have sustained paired playback samples').toBeGreaterThanOrEqual(300);
+  expect(levelTwoAudioReport.maxAbsoluteDriftMs, 'source audio/video media clocks should remain within 80 ms')
+    .toBeLessThanOrEqual(80);
+  expect(levelTwoAudioReport.transitionSampleCount, 'the original mixed track should continue during the source transition')
+    .toBeGreaterThanOrEqual(20);
+  expect(levelTwoAudioReport.stoppedOnLevelThree, 'Level 2 source audio should stop and reset after transition to Level 3')
+    .toBeTruthy();
   const totalTransitionMs = await page.evaluate((startedAt) => performance.now() - startedAt, pendingAt);
   expect(totalTransitionMs, 'Level 2 source settle plus logo/reveal timing').toBeGreaterThanOrEqual(2_000);
   expect(totalTransitionMs).toBeLessThanOrEqual(2_250);
+});
+
+test('Level 2 原作混合音轨随设置暂停并从原位置续播', async ({ page }) => {
+  test.setTimeout(20_000);
+  await completeLevelOne(page);
+  await dragThroughAt60Hz(page, 450, 750, [{ x: 450, y: 550, durationMs: 100 }]);
+  const sourceAudio = page.locator('#level-two-source-audio');
+  const sourceVideo = page.locator('#level-two-source-gameplay-video');
+  await expect.poll(() => sourceAudio.evaluate((audio) => (
+    !audio.paused && !audio.muted && audio.currentTime > 0.1
+  ))).toBeTruthy();
+  await expect.poll(() => sourceAudio.evaluate((audio) => audio.currentTime > 0.45)).toBeTruthy();
+
+  const beforePause = await sourceAudio.evaluate((audio) => audio.currentTime);
+  await page.getByRole('button', { name: '打开设置' }).click();
+  await expect.poll(() => sourceAudio.evaluate((audio) => audio.paused && audio.muted)).toBeTruthy();
+  await expect.poll(() => sourceVideo.evaluate((video) => video.paused)).toBeTruthy();
+  const progressWhenPaused = Number(await page.locator('#game-canvas').getAttribute('data-progress-red'));
+  await page.waitForTimeout(350);
+  const pausedState = await sourceAudio.evaluate((audio) => ({ time: audio.currentTime, paused: audio.paused }));
+  const progressDuringPause = Number(await page.locator('#game-canvas').getAttribute('data-progress-red'));
+  expect(Math.abs(pausedState.time - beforePause), 'source audio should stop within one browser frame after settings opens')
+    .toBeLessThanOrEqual(0.08);
+  expect(progressDuringPause, 'red progress should freeze after the settings pause takes effect').toBe(progressWhenPaused);
+
+  await page.getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(() => sourceAudio.evaluate((audio, resumeFrom) => (
+    !audio.paused && !audio.muted && audio.currentTime > resumeFrom + 0.15
+  ), pausedState.time)).toBeTruthy();
+  await expect.poll(() => sourceVideo.evaluate((video) => !video.paused)).toBeTruthy();
 });
 
 test('Level 3–5 的不同颜色槽能命中各自像素目标', async ({ page }) => {

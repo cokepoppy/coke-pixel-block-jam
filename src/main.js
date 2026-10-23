@@ -138,14 +138,23 @@ levelOneSourceAudio.preload = 'auto';
 levelOneSourceAudio.setAttribute('aria-hidden', 'true');
 levelOneSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneSourceAudio);
-const LEVEL_ONE_OPENING_BLEND_START = 696;
+const levelTwoSourceAudio = document.createElement('audio');
+levelTwoSourceAudio.id = 'level-two-source-audio';
+levelTwoSourceAudio.src = '/assets/level2/level2-source-audio.m4a';
+levelTwoSourceAudio.preload = 'auto';
+levelTwoSourceAudio.muted = true;
+levelTwoSourceAudio.setAttribute('aria-hidden', 'true');
+levelTwoSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelTwoSourceAudio);
+const LEVEL_ONE_OPENING_BLEND_START = 744;
+const LEVEL_ONE_ACTION_BLEND_START = 744;
 const levelOneSourceBlendCanvas = document.createElement('canvas');
 levelOneSourceBlendCanvas.width = 564;
 levelOneSourceBlendCanvas.height = 756 - LEVEL_ONE_OPENING_BLEND_START;
 const levelOneSourceBlendContext = levelOneSourceBlendCanvas.getContext('2d');
 const levelOneSourceFadeMask = document.createElement('canvas');
 levelOneSourceFadeMask.width = 564;
-levelOneSourceFadeMask.height = 756 - LEVEL_ONE_OPENING_BLEND_START;
+levelOneSourceFadeMask.height = 756 - LEVEL_ONE_ACTION_BLEND_START;
 const levelOneSourceFadeMaskContext = levelOneSourceFadeMask.getContext('2d');
 const levelOneSourceFadeGradient = levelOneSourceFadeMaskContext.createLinearGradient(0, 0, 0, levelOneSourceFadeMask.height);
 levelOneSourceFadeGradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
@@ -1879,27 +1888,65 @@ function addCollectedEffects(cells, now, bucket, { announce = true, playSound = 
   }
 }
 
+function syncLevelTwoSourceAudio(targetTime, shouldPlay) {
+  if (!shouldPlay) {
+    levelTwoSourceAudio.pause();
+    levelTwoSourceAudio.muted = true;
+    return;
+  }
+  levelTwoSourceAudio.muted = !audio.isUsingSourceMix();
+  if (levelTwoSourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || levelTwoSourceAudio.seeking) return;
+  const duration = Number.isFinite(levelTwoSourceAudio.duration) ? levelTwoSourceAudio.duration : 9.8;
+  const safeTargetTime = Math.max(0, Math.min(duration - 0.01, targetTime));
+  if (Math.abs(safeTargetTime - levelTwoSourceAudio.currentTime) > 0.08) {
+    levelTwoSourceAudio.pause();
+    levelTwoSourceAudio.currentTime = safeTargetTime;
+    return;
+  }
+  if (safeTargetTime < duration - 0.02 && levelTwoSourceAudio.paused) {
+    void levelTwoSourceAudio.play().catch(() => {});
+  }
+}
+
+function resetLevelTwoSourceAudio() {
+  levelTwoSourceAudio.pause();
+  levelTwoSourceAudio.muted = true;
+  if (levelTwoSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    levelTwoSourceAudio.currentTime = 0;
+  }
+}
+
 function advanceLevelTwoSourcePlayback(now) {
   const timeline = state.levelTwoSourceTimeline;
   const video = levelTwoSourceGameplayVideo;
   if (!timeline || state.game.level !== 2) {
     if (!video.paused) video.pause();
+    if (!(state.game.level === 2 && state.dragging)) levelTwoSourceAudio.pause();
     return;
   }
 
   if (state.game.status === 'paused' || document.hidden) {
     timeline.pausedAt ??= now;
     if (!video.paused) video.pause();
+    syncLevelTwoSourceAudio(0, false);
     return;
   }
   if (Number.isFinite(timeline.pausedAt)) {
-    timeline.startedAt += now - timeline.pausedAt;
+    const pausedDuration = now - timeline.pausedAt;
+    timeline.startedAt += pausedDuration;
+    for (const bucket of state.game.buckets) {
+      if (bucket.sourceCollectionActive && Number.isFinite(bucket.sourceProgressStartedAt)) {
+        bucket.sourceProgressStartedAt += pausedDuration;
+      }
+    }
     timeline.pausedAt = null;
   }
+  const duration = Number.isFinite(video.duration) ? video.duration : 8.617;
+  const sourceTime = Math.max(0, 0.2 + ((now - timeline.startedAt) / 1_000));
+  const targetTime = Math.min(duration - (1 / 60), sourceTime);
+  syncLevelTwoSourceAudio(sourceTime, state.game.status !== 'lost');
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
 
-  const duration = Number.isFinite(video.duration) ? video.duration : 8.617;
-  const targetTime = Math.max(0, Math.min(duration - (1 / 60), 0.2 + ((now - timeline.startedAt) / 1_000)));
   const drift = targetTime - video.currentTime;
   if (Math.abs(drift) > 0.08) {
     video.pause();
@@ -1920,7 +1967,8 @@ function advanceLevelTwoSourcePlayback(now) {
 }
 
 function advanceLevelTwoCollectionProgress(now) {
-  if (state.game.level !== 2 || !state.game.bucketDisplayedCollected) return;
+  if (state.game.level !== 2 || !state.game.bucketDisplayedCollected
+    || state.game.status === 'paused' || document.hidden) return;
   const bucketNames = { red: '红色', green: '绿色', yellow: '黄色' };
   for (const bucket of state.game.buckets) {
     if (!bucket.sourceCollectionActive || !Number.isFinite(bucket.sourceProgressStartedAt)) continue;
@@ -2393,8 +2441,8 @@ function colorName(color) {
   })[color] ?? '';
 }
 
-function drawLevelOneFadedPanel(source, sourceWidth, height, destinationWidth = sourceWidth) {
-  const bottomHeight = height - LEVEL_ONE_OPENING_BLEND_START;
+function drawLevelOneFadedPanel(source, sourceWidth, height, destinationWidth = sourceWidth, blendStart = LEVEL_ONE_OPENING_BLEND_START) {
+  const bottomHeight = height - blendStart;
   if (levelOneSourceBlendCanvas.width !== destinationWidth || levelOneSourceBlendCanvas.height !== bottomHeight) {
     levelOneSourceBlendCanvas.width = destinationWidth;
     levelOneSourceBlendCanvas.height = bottomHeight;
@@ -2403,11 +2451,11 @@ function drawLevelOneFadedPanel(source, sourceWidth, height, destinationWidth = 
   ctx.imageSmoothingEnabled = false;
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.drawImage(source, 0, 0, sourceWidth, LEVEL_ONE_OPENING_BLEND_START,
-    17, 226, destinationWidth, LEVEL_ONE_OPENING_BLEND_START);
+  ctx.drawImage(source, 0, 0, sourceWidth, blendStart,
+    17, 226, destinationWidth, blendStart);
   levelOneSourceBlendContext.imageSmoothingEnabled = false;
   levelOneSourceBlendContext.globalCompositeOperation = 'source-over';
-  levelOneSourceBlendContext.drawImage(source, 0, LEVEL_ONE_OPENING_BLEND_START, sourceWidth, bottomHeight,
+  levelOneSourceBlendContext.drawImage(source, 0, blendStart, sourceWidth, bottomHeight,
     0, 0, destinationWidth, bottomHeight);
   levelOneSourceBlendContext.globalCompositeOperation = 'destination-in';
   levelOneSourceBlendContext.drawImage(levelOneSourceFadeMask, 0, 0, destinationWidth, bottomHeight);
@@ -2426,7 +2474,7 @@ function drawLevelOneSourceActionPanel() {
   if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const width = levelOneSourceVideo.videoWidth || 564;
   const height = levelOneSourceVideo.videoHeight || 756;
-  drawLevelOneFadedPanel(levelOneSourceVideo, width, height, width);
+  drawLevelOneFadedPanel(levelOneSourceVideo, width, height, width, LEVEL_ONE_ACTION_BLEND_START);
 }
 
 function drawLevelOneSourceBoardFrame() {
@@ -2440,9 +2488,9 @@ function drawLevelOneSourceBoardFrame() {
   ctx.restore();
 }
 
-function drawLevelOneBucketsUnderSourcePanel() {
+function drawLevelOneBucketsUnderSourcePanel(blendStart = LEVEL_ONE_OPENING_BLEND_START) {
   const { frame } = state.game.config;
-  const panelBlendStart = 226 + LEVEL_ONE_OPENING_BLEND_START;
+  const panelBlendStart = 226 + blendStart;
   ctx.save();
   ctx.beginPath();
   ctx.rect(frame.x, panelBlendStart, frame.width, frame.y + frame.height - panelBlendStart);
@@ -2641,7 +2689,7 @@ function drawScene(now) {
     // The yellow source interval contains only its own sweep. Later intervals
     // include neighboring slot motion, so those keep live slot rendering.
     if (state.levelOneSourceTimeline.color === 'yellow') {
-      drawLevelOneBucketsUnderSourcePanel();
+      drawLevelOneBucketsUnderSourcePanel(LEVEL_ONE_ACTION_BLEND_START);
       drawLevelOneSourceActionPanel();
     } else {
       drawPixelWall();
@@ -2734,6 +2782,7 @@ function dockLevelTwoBucket(bucket, startedAt) {
     state.game.moves += 1;
     if (firstBucketMove && bucket.color === 'red') {
       state.levelTwoSourceTimeline = { startedAt, pausedAt: null, seeking: false };
+      audio.setSourceMixMode(true);
     }
   }
   bucket.sourceCollectionActive = true;
@@ -2763,6 +2812,12 @@ function onPointerDown(event) {
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   if (state.game.level === 1) audio.setSourceMixMode(true);
+  if (state.game.level === 2 && !state.levelTwoSourceTimeline) {
+    // A muted play request inside this trusted pointer gesture unlocks the
+    // original mixed track before the first valid red dock starts its timeline.
+    levelTwoSourceAudio.muted = true;
+    void levelTwoSourceAudio.play().catch(() => {});
+  }
   void audio.startFromGesture();
   state.dragging = true;
   state.dragStartedAt = performance.now();
@@ -2830,6 +2885,7 @@ function restartCurrentLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  resetLevelTwoSourceAudio();
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
@@ -2854,6 +2910,7 @@ function advanceToNextLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  resetLevelTwoSourceAudio();
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
@@ -3099,6 +3156,10 @@ function onPointerUp(event) {
   state.dragDistance = 0;
   state.game.activeBucketId = null;
   if (state.game.level !== 2) state.game.moves += state.moveCollected > 0 ? 1 : 0;
+  if (state.game.level === 2 && !state.levelTwoSourceTimeline) {
+    resetLevelTwoSourceAudio();
+    audio.setSourceMixMode(false);
+  }
   if (state.game.status === 'won') showEndDialog();
 }
 
