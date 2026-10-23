@@ -270,20 +270,117 @@ test('点击设置按钮后可继续游戏', async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-test('Level 1 教程手势按录屏轨迹循环播放', async ({ page }) => {
+test('Level 1 教程逐帧对齐原片，循环时黄色槽不动', async ({ page }, testInfo) => {
   const tutorialVideo = page.locator('#level-one-tutorial-video');
   await expect.poll(() => tutorialVideo.evaluate((video) => (
     video.currentSrc.endsWith('/assets/level1/level1-tutorial-hand.mp4')
       && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
       && !video.paused
   ))).toBeTruthy();
-  const first = await page.screenshot();
-  await page.waitForTimeout(180);
-  const second = await page.screenshot();
-  const before = await sharp(first).extract({ left: 260, top: 600, width: 190, height: 210 }).ensureAlpha().raw().toBuffer();
-  const after = await sharp(second).extract({ left: 260, top: 600, width: 190, height: 210 }).ensureAlpha().raw().toBuffer();
-  const changed = pixelmatch(before, after, Buffer.alloc(before.length), 190, 210, { threshold: 0.16, includeAA: false });
-  expect(changed, 'Level 1 source hand should move through the tutorial pad').toBeGreaterThan(1_000);
+  const duration = await tutorialVideo.evaluate((video) => video.duration);
+  expect(duration, 'the tutorial clip must end before the source begins lifting the yellow tray').toBeLessThanOrEqual(26 / 60 + 0.002);
+  expect(duration, 'the tutorial loop must retain the full hand-only movement').toBeGreaterThan(25 / 60 - 0.002);
+
+  const captureFrame = async (frameIndex, label) => {
+    const sample = await page.evaluate(async (index) => {
+      const video = document.querySelector('#level-one-tutorial-video');
+      const gameCanvas = document.querySelector('#game-canvas');
+      const gameContext = gameCanvas.getContext('2d');
+      const ratio = gameCanvas.width / 597;
+      const targetTime = (index + 0.5) / 60;
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      video.pause();
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`Tutorial seek to frame ${index} timed out`)), 3_000);
+        video.addEventListener('seeked', () => {
+          clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+        video.currentTime = targetTime;
+      });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const sourcePanel = document.createElement('canvas');
+      sourcePanel.width = 563;
+      sourcePanel.height = 756;
+      const sourceContext = sourcePanel.getContext('2d');
+      sourceContext.imageSmoothingEnabled = false;
+      sourceContext.drawImage(video, 0, 0, 563, 756);
+
+      const referenceCanvas = document.createElement('canvas');
+      referenceCanvas.width = gameCanvas.width;
+      referenceCanvas.height = gameCanvas.height;
+      const referenceContext = referenceCanvas.getContext('2d', { alpha: false });
+      referenceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+      referenceContext.drawImage(sourcePanel, 17, 226);
+
+      const encode = (pixels) => {
+        const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+        let binary = '';
+        for (let start = 0; start < bytes.length; start += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+        }
+        return btoa(binary);
+      };
+      const read = (context, rect) => context.getImageData(
+        Math.round(rect.left * ratio), Math.round(rect.top * ratio),
+        Math.round(rect.width * ratio), Math.round(rect.height * ratio),
+      );
+      const yellowRect = { left: 17 + 150, top: 226 + 555, width: 270, height: 135 };
+      const handRect = { left: 17 + 260, top: 226 + 320, width: 190, height: 210 };
+      const sampleRegion = (rect) => {
+        const actual = read(gameContext, rect);
+        const reference = read(referenceContext, rect);
+        if (actual.width !== reference.width || actual.height !== reference.height) {
+          throw new Error('Tutorial source and game canvas crops have different dimensions');
+        }
+        return {
+          width: actual.width,
+          height: actual.height,
+          actual: encode(actual.data),
+          reference: encode(reference.data),
+        };
+      };
+      return {
+        time: video.currentTime,
+        yellow: sampleRegion(yellowRect),
+        hand: sampleRegion(handRect),
+      };
+    }, frameIndex);
+    await page.screenshot({ path: testInfo.outputPath(`level1-tutorial-${label}.png`) });
+    return sample;
+  };
+
+  // Frames 0, 15, and 25 span the original hand gesture. The final capture
+  // returns to frame 0 to exercise the loop seam without replaying tray motion.
+  const frames = [
+    await captureFrame(0, 'frame-00'),
+    await captureFrame(15, 'frame-15'),
+    await captureFrame(25, 'frame-25'),
+    await captureFrame(0, 'loop-frame-00'),
+  ];
+  const compareRegion = (before, after, label) => {
+    const beforePixels = Buffer.from(before, 'base64');
+    const afterPixels = Buffer.from(after, 'base64');
+    if (beforePixels.length !== afterPixels.length || beforePixels.length !== label.width * label.height * 4) {
+      throw new Error(`Bad ${label.width}x${label.height} crop: ${beforePixels.length} vs ${afterPixels.length} bytes`);
+    }
+    return pixelmatch(beforePixels, afterPixels, Buffer.alloc(beforePixels.length), label.width, label.height, {
+      threshold: 0.04,
+      includeAA: false,
+    });
+  };
+
+  for (const [index, frame] of frames.entries()) {
+    expect(compareRegion(frame.hand.actual, frame.hand.reference, frame.hand), `frame ${index} hand must match its source video frame`).toBe(0);
+    expect(compareRegion(frame.yellow.actual, frame.yellow.reference, frame.yellow), `frame ${index} yellow tray must match its source video frame`).toBe(0);
+  }
+  const handMotion = compareRegion(frames[0].hand.actual, frames[1].hand.actual, frames[0].hand);
+  expect(handMotion, 'the original hand gesture must visibly advance between source frames 0 and 15').toBeGreaterThan(1_000);
+  for (const [index, frame] of frames.slice(1).entries()) {
+    const trayMotion = compareRegion(frames[0].yellow.actual, frame.yellow.actual, frames[0].yellow);
+    expect(trayMotion, `yellow tray must remain pixel-stable at source frame ${[15, 25, 0][index]}`).toBe(0);
+  }
 });
 
 test('Level 1 黄色槽按真实指针节奏连续上移，扫墙从对应源帧接上', async ({ page }, testInfo) => {
