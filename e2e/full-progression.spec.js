@@ -114,19 +114,31 @@ async function playClearRoute(page, level, actions) {
     y: box.y + (point.y / 1296) * box.height,
   });
 
-  for (const action of actions) {
-    const start = browserPoint(action.point);
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    for (const destination of action.destinations) {
-      const target = browserPoint({
-        x: destination.x + action.offset.x,
-        y: destination.y + action.offset.y,
-      });
-      await page.mouse.move(target.x, target.y);
+  if (level === 1) {
+    for (const [x, color] of [[298, '黄色'], [111, '绿色'], [485, '红色']]) {
+      const start = browserPoint({ x, y: 866 });
+      const target = browserPoint({ x, y: 620 });
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(target.x, target.y, { steps: 36 });
+      await page.mouse.up();
+      await expect(page.locator('#live-status')).toContainText(`${color} 像素块，进度 100%`, { timeout: 5_000 });
     }
-    await page.mouse.up();
-    await page.waitForTimeout(500);
+  } else {
+    for (const action of actions) {
+      const start = browserPoint(action.point);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (const destination of action.destinations) {
+        const target = browserPoint({
+          x: destination.x + action.offset.x,
+          y: destination.y + action.offset.y,
+        });
+        await page.mouse.move(target.x, target.y);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+    }
   }
 
   if (level === 9) {

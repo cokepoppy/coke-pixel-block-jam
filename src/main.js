@@ -122,20 +122,6 @@ levelOneSourceAudio.preload = 'auto';
 levelOneSourceAudio.setAttribute('aria-hidden', 'true');
 levelOneSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneSourceAudio);
-const LEVEL_ONE_SOURCE_KEYFRAMES = [
-  ['yellow-6', 'yellow', 6], ['yellow-36', 'yellow', 36], ['yellow-63', 'yellow', 63],
-  ['yellow-99', 'yellow', 99], ['yellow-100', 'yellow', 100],
-  ['green-25', 'green', 25], ['green-48', 'green', 48], ['green-71', 'green', 71],
-  ['green-85', 'green', 85], ['green-99', 'green', 99], ['green-100', 'green', 100],
-  ['red-3', 'red', 3], ['red-6', 'red', 6], ['red-69', 'red', 69], ['red-72', 'red', 72],
-  ['red-77', 'red', 77], ['red-82', 'red', 82], ['red-86', 'red', 86], ['red-92', 'red', 92],
-  ['red-96', 'red', 96], ['red-100', 'red', 100],
-];
-const levelOneSourceKeyframes = LEVEL_ONE_SOURCE_KEYFRAMES.map(([name, color, progress]) => {
-  const image = new Image();
-  image.src = `/assets/level1/keyframes/${name}.webp`;
-  return { image, color, progress };
-});
 const levelOneSourcePanelCanvas = document.createElement('canvas');
 levelOneSourcePanelCanvas.width = 563;
 levelOneSourcePanelCanvas.height = 756;
@@ -454,20 +440,25 @@ function drawText(text, x, y, options = {}) {
     shadow = '#182850',
     shadowBlur = 2,
     shadowY = 3,
+    centerY,
   } = options;
   ctx.save();
   ctx.textAlign = align;
-  ctx.textBaseline = 'alphabetic';
   ctx.font = `${weight} ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+  ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
   ctx.lineWidth = lineWidth;
   ctx.strokeStyle = stroke;
   ctx.shadowColor = shadow;
   ctx.shadowBlur = shadowBlur;
   ctx.shadowOffsetY = shadowY;
-  ctx.strokeText(text, x, y);
+  const metrics = centerY === undefined ? null : ctx.measureText(text);
+  const baseline = centerY === undefined
+    ? y
+    : centerY + (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+  ctx.strokeText(text, x, baseline);
   ctx.fillStyle = fill;
-  ctx.fillText(text, x, y);
+  ctx.fillText(text, x, baseline);
   ctx.restore();
 }
 
@@ -527,8 +518,8 @@ function drawHeader() {
   ctx.strokeStyle = '#b9e5f1';
   ctx.stroke();
   ctx.restore();
-  drawText(formatClock(state.game.timeRemaining), 298, 98, {
-    size: 42, fill: '#fff', stroke: '#2c2942', lineWidth: 7, shadow: '#241f34', shadowY: 3,
+  drawText(formatClock(state.game.timeRemaining), 298, 83, {
+    size: 42, align: 'center', centerY: 83, fill: '#fff', stroke: '#2c2942', lineWidth: 7, shadow: '#241f34', shadowY: 3,
   });
   if (state.game.level === 1 && levelOneSettingsGearImage.complete && levelOneSettingsGearImage.naturalWidth > 0) {
     ctx.save();
@@ -1062,8 +1053,16 @@ function drawPadTiles(pad) {
   if (levelOneSourcePad) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    for (let column = 0; column < Math.min(cols, levelOnePadCellImages.length); column += 1) {
-      ctx.drawImage(levelOnePadCellImages[column], x + column * (cellWidth + gap), y, cellWidth, cellHeight);
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < Math.min(cols, levelOnePadCellImages.length); column += 1) {
+        ctx.drawImage(
+          levelOnePadCellImages[column],
+          x + column * (cellWidth + gap),
+          y + row * (cellHeight + gap),
+          cellWidth,
+          cellHeight,
+        );
+      }
     }
     ctx.restore();
   }
@@ -1075,7 +1074,10 @@ function drawPad() {
     for (const panel of config.panels) drawPadTiles(panel.pad);
     return;
   }
-  drawPadTiles(config.pad);
+  const levelOneExpandedPad = state.game.level === 1 && state.game.started
+    ? { ...config.pad, rows: 4 }
+    : config.pad;
+  drawPadTiles(levelOneExpandedPad);
   if (config.layout === 'pipes') drawPipeTracks();
 }
 
@@ -1111,12 +1113,9 @@ function drawBucket(bucket, lockedPreview = false) {
     ? bucket.segments
     : [{ x: 0, y: 0, width, height }];
   const composite = Boolean(bucket.segments?.length);
-  const levelOneScaleY = state.game.level === 1 && progress > 0
-    ? 1.05 + (1 - progress / 100) * 0.02
-    : 1;
   ctx.save();
   ctx.translate(0, y);
-  ctx.scale(1, levelOneScaleY);
+  ctx.scale(1, 1);
   ctx.translate(0, -y);
 
   for (const segment of segments) {
@@ -1219,7 +1218,7 @@ function drawBucket(bucket, lockedPreview = false) {
         roundedRect(cavity.x, cavity.y, cavity.width, cavity.height, Math.min(16, cavity.width * 0.12, cavity.height * 0.12));
         ctx.clip();
         ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(levelOneYellowPileImage, cavity.x, cavity.y + 2, cavity.width, levelOneYellowPileImage.naturalHeight / levelOneScaleY);
+        ctx.drawImage(levelOneYellowPileImage, cavity.x, cavity.y + 2, cavity.width, levelOneYellowPileImage.naturalHeight);
         ctx.restore();
         sourcePileUsed = true;
         continue;
@@ -2030,22 +2029,33 @@ function drawLevelOneSourcePanel(source) {
   levelOneSourcePanelContext.clearRect(0, 0, 563, 756);
   levelOneSourcePanelContext.imageSmoothingEnabled = false;
   levelOneSourcePanelContext.drawImage(source, 0, 0, 563, 756);
-  const bottom = levelOneSourcePanelContext.getImageData(0, 750, 563, 6);
-  const alphaByRow = [255, 204, 153, 102, 51, 0];
-  for (let y = 0; y < 6; y += 1) {
+  const fadeStart = 732;
+  const fadeRows = levelOneSourcePanelCanvas.height - fadeStart;
+  const bottom = levelOneSourcePanelContext.getImageData(0, fadeStart, 563, fadeRows);
+  for (let y = 0; y < fadeRows; y += 1) {
+    const alpha = Math.round((1 - y / (fadeRows - 1)) * 255);
     for (let x = 0; x < 563; x += 1) {
       const alphaOffset = (y * 563 + x) * 4 + 3;
-      bottom.data[alphaOffset] = Math.round((bottom.data[alphaOffset] * alphaByRow[y]) / 255);
+      bottom.data[alphaOffset] = Math.round((bottom.data[alphaOffset] * alpha) / 255);
     }
   }
-  levelOneSourcePanelContext.putImageData(bottom, 0, 750);
+  levelOneSourcePanelContext.putImageData(bottom, 0, fadeStart);
   ctx.drawImage(levelOneSourcePanelCanvas, 17, 226);
 }
 
 function drawLevelOneBucketsUnderSourcePanel() {
+  const { frame } = state.game.config;
+  const blendStart = 226 + 732;
   ctx.save();
   ctx.beginPath();
-  ctx.rect(17, 976, 563, 78);
+  ctx.rect(frame.x, blendStart, frame.width, frame.y + frame.height - blendStart);
+  ctx.clip();
+  drawFramePanel(frame, state.game.config.wall);
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(17, blendStart, 563, frame.y + frame.height - blendStart);
   ctx.clip();
   drawBuckets();
   ctx.restore();
@@ -2149,22 +2159,6 @@ function drawLevelOneLocalizedBrandMark(sourceTime) {
   ctx.restore();
 }
 
-function redrawLevelOnePhoneHudOcclusion(now) {
-  // The source video briefly contains the iPhone volume HUD over this area.
-  // Rebuild only the covered game pixels from the live Level 1 state so a
-  // later, completed frame is not pasted over an earlier sweep milestone.
-  ctx.save();
-  ctx.beginPath();
-  ctx.roundRect(17, 364, 66, 220, 33);
-  ctx.clip();
-  drawGameFrame();
-  drawPixelWall();
-  drawPad();
-  drawBuckets();
-  drawParticles(now);
-  ctx.restore();
-}
-
 function drawScene(now) {
   if (state.loading) {
     drawLoadingScreen(now);
@@ -2186,20 +2180,8 @@ function drawScene(now) {
     && state.game.moves === 0
     && levelTwoOpeningPanelImage.complete
     && levelTwoOpeningPanelImage.naturalWidth > 0;
-  const levelOneSourceBucket = state.game.level === 1 && state.levelOneSourceTimeline
-    ? state.game.buckets.find((bucket) => bucket.color === state.levelOneSourceTimeline.color)
-    : null;
-  const levelOneSourceProgress = levelOneSourceBucket ? getProgress(state.game, levelOneSourceBucket) : null;
-  const matchingLevelOneSourceKeyframes = levelOneSourceBucket
-    ? levelOneSourceKeyframes.filter((candidate) => candidate.color === state.levelOneSourceTimeline.color
-      && !(candidate.color === 'red' && candidate.progress === 100 && levelOneSourceVideo.currentTime > 4.67)
-      && candidate.image.complete && candidate.image.naturalWidth > 0)
-    : [];
-  const levelOneSourceKeyframe = matchingLevelOneSourceKeyframes.find((candidate) => candidate.progress === levelOneSourceProgress)
-    ?? matchingLevelOneSourceKeyframes.find((candidate) => Math.abs(candidate.progress - levelOneSourceProgress) <= 1);
   const showSourceActionPanel = state.game.level === 1
-    && state.levelOneSourceTimeline
-    && (levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || levelOneSourceKeyframe);
+    && Boolean(state.levelOneSourceTimeline);
   const showLevelOneBrandPrelude = showSourceActionPanel
     && state.levelOneSourceTimeline.color === 'red'
     && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -2207,12 +2189,14 @@ function drawScene(now) {
   if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {
-    const hasRecordedVolumeHud = state.levelOneSourceTimeline.color === 'green'
-      && (levelOneSourceKeyframe ? levelOneSourceKeyframe.progress <= 85 : levelOneSourceVideo.currentTime >= 3.2 && levelOneSourceVideo.currentTime <= 3.8);
-    drawLevelOneBucketsUnderSourcePanel();
-    if (levelOneSourceKeyframe) drawLevelOneSourcePanel(levelOneSourceKeyframe.image);
-    else drawLevelOneSourcePanel(levelOneSourceVideo);
-    if (hasRecordedVolumeHud) redrawLevelOnePhoneHudOcclusion(now);
+    // The source recording contains several consecutive touches. Replaying its
+    // full panel during one browser drag also replays later bucket movements,
+    // while hit testing still uses this game's bucket coordinates. Keep the
+    // reference audio timeline, but render positions and particles from state.
+    drawPixelWall();
+    drawPad();
+    drawBuckets();
+    drawParticles(now);
   } else if (showSourceOpeningPanel) {
     const tutorialPanelSource = !prefersReducedMotion.matches
       && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
