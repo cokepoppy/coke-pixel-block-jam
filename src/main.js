@@ -32,6 +32,7 @@ const hasPreviewLevel = Number.isInteger(requestedPreviewLevel) && requestedPrev
 const requestedPreviewReward = query.get('previewReward') === '1';
 const requestedSplashPreview = query.get('previewSplash') === '1';
 const loadingScreenDurationMs = 1783;
+const previewLevelOneAssetGate = hasPreviewLevel && requestedPreviewLevel === 1 && !requestedSplashPreview;
 const levelTwoWinSettleDurationMs = 900;
 const levelTwoTransitionDurationMs = 1200;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
@@ -70,7 +71,11 @@ const LEVEL_PIXEL_THEMES = {
 
 const state = {
   game: createGameState(initialLevel),
-  loading: requestedSplashPreview || !hasPreviewLevel,
+  // Keep the first-level preview on its loading scene until the source opening
+  // panel and hand clip are decoded. Otherwise the first paint shows the
+  // procedural buckets, then swaps to the source frame and can look like a
+  // yellow-slot flash during startup.
+  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate,
   loadingPreview: requestedSplashPreview,
   loadingStartedAt: performance.now(),
   lastFrameAt: performance.now(),
@@ -131,6 +136,14 @@ levelOneSourceVideo.disablePictureInPicture = true;
 levelOneSourceVideo.setAttribute('aria-hidden', 'true');
 levelOneSourceVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneTutorialVideo, levelOneSourceVideo);
+
+function initialLevelOnePanelReady() {
+  if (initialLevel !== 1) return true;
+  if (!levelOneOpeningPanelImage.complete || levelOneOpeningPanelImage.naturalWidth === 0) return false;
+  return prefersReducedMotion.matches
+    || levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+}
+
 const levelOneSourceAudio = document.createElement('audio');
 levelOneSourceAudio.id = 'level-one-source-audio';
 levelOneSourceAudio.src = '/assets/level1/level1-source-audio.m4a';
@@ -3195,7 +3208,10 @@ function setCanvasDensity() {
 function frame(now) {
   const delta = Math.min(0.05, Math.max(0, (now - state.lastFrameAt) / 1000));
   state.lastFrameAt = now;
-  if (state.loading && !state.loadingPreview && now - state.loadingStartedAt >= loadingScreenDurationMs) {
+  const minimumLoadingMs = previewLevelOneAssetGate ? 0 : loadingScreenDurationMs;
+  if (state.loading && !state.loadingPreview
+      && now - state.loadingStartedAt >= minimumLoadingMs
+      && initialLevelOnePanelReady()) {
     state.loading = false;
     liveStatus.textContent = `第 ${initialLevel} 关开始`;
     canvas.setAttribute('aria-label', '拖动收集槽收集彩色像素方块');

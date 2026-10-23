@@ -840,6 +840,27 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
     .toBe(1);
 });
 
+test('Level 1 冷启动等开场素材解码后再显示，避免黄色槽首帧跳变', async ({ page }) => {
+  await page.route('**/assets/level1/level1-tutorial-hand.mp4', async (route) => {
+    await page.waitForTimeout(700);
+    await route.continue();
+  });
+  await page.goto('/?previewLevel=1', { waitUntil: 'domcontentloaded' });
+
+  const canvas = page.locator('#game-canvas');
+  const tutorialVideo = page.locator('#level-one-tutorial-video');
+  await expect(canvas, 'keep the loading scene visible while the hand clip is still withheld')
+    .toHaveAttribute('aria-label', '正在加载游戏');
+  expect(await tutorialVideo.evaluate((video) => video.readyState), 'the delayed clip should not be decoded yet')
+    .toBeLessThan(2);
+
+  await expect.poll(() => tutorialVideo.evaluate((video) => (
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  )), { timeout: 5_000 }).toBeTruthy();
+  await expect(canvas).toHaveAttribute('aria-label', '拖动收集槽收集彩色像素方块');
+  await expect.poll(() => tutorialVideo.evaluate((video) => video.currentTime > 0.02)).toBeTruthy();
+});
+
 test('Level 1 冷启动手势自然播放一次后停住，黄色槽不闪回', async ({ page }) => {
   await page.addInitScript(() => {
     const probe = window.__pbjTutorialPlaybackProbe = {
