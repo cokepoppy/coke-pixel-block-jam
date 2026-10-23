@@ -13,7 +13,7 @@ const levelOneSettingsGearPixels = await sharp(fileURLToPath(new URL('../assets/
   .raw()
   .toBuffer({ resolveWithObject: true });
 const levelOneOpeningPanelPixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-opening-panel.png', import.meta.url)))
-  .extract({ left: 0, top: 0, width: 563, height: 732 })
+  .extract({ left: 0, top: 0, width: 563, height: 696 })
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true });
@@ -385,7 +385,7 @@ test('Level 1 开局棋盘和底框连续贴合录屏裁切', async ({ page }, t
   });
   expect(gearDiff, `Level 1 settings gear differs at ${gearDiff} of 4356 pixels`).toBe(0);
   const panel = await sharp(screenshot)
-    .extract({ left: 17, top: 226, width: 563, height: 732 })
+    .extract({ left: 17, top: 226, width: 563, height: 696 })
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
@@ -395,24 +395,25 @@ test('Level 1 开局棋盘和底框连续贴合录屏裁切', async ({ page }, t
   });
   expect(panelDiff, `Level 1 opening panel differs at ${panelDiff} of ${panel.info.width * panel.info.height} pixels`).toBe(0);
 
-  for (const x of [23, 574]) {
-    const edge = await sharp(screenshot)
-      .extract({ left: x, top: 968, width: 1, height: 20 })
+  for (const [left, edge] of [[17, 'left'], [549, 'right']]) {
+    const strip = await sharp(screenshot)
+      .extract({ left, top: 956, width: 31, height: 32 })
       .removeAlpha()
       .raw()
-      .toBuffer();
+      .toBuffer({ resolveWithObject: true });
     let largestStep = 0;
-    for (let y = 1; y < 20; y += 1) {
-      const offset = y * 3;
-      const previous = offset - 3;
-      const step = Math.hypot(
-        edge[offset] - edge[previous],
-        edge[offset + 1] - edge[previous + 1],
-        edge[offset + 2] - edge[previous + 2],
-      );
-      largestStep = Math.max(largestStep, step);
+    for (let y = 1; y < strip.info.height; y += 1) {
+      let rowDifference = 0;
+      for (let x = 0; x < strip.info.width; x += 1) {
+        const offset = (y * strip.info.width + x) * 3;
+        const previous = offset - strip.info.width * 3;
+        rowDifference += Math.abs(strip.data[offset] - strip.data[previous])
+          + Math.abs(strip.data[offset + 1] - strip.data[previous + 1])
+          + Math.abs(strip.data[offset + 2] - strip.data[previous + 2]);
+      }
+      largestStep = Math.max(largestStep, rowDifference / (strip.info.width * 3));
     }
-    expect(largestStep, `Level 1 lower frame should not have a horizontal crop seam at x=${x}`).toBeLessThan(30);
+    expect(largestStep, `Level 1 ${edge} lower frame should not have a horizontal crop seam`).toBeLessThan(5);
   }
 
   const actual = await sharp(screenshot)

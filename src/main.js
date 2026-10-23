@@ -126,6 +126,7 @@ const levelOneSourcePanelCanvas = document.createElement('canvas');
 levelOneSourcePanelCanvas.width = 563;
 levelOneSourcePanelCanvas.height = 756;
 const levelOneSourcePanelContext = levelOneSourcePanelCanvas.getContext('2d');
+const LEVEL_ONE_OPENING_BLEND_START = 696;
 const levelOneYellowPileImage = new Image();
 levelOneYellowPileImage.src = '/assets/level1/level1-yellow-pile-100.png';
 const levelTwoBoardImage = new Image();
@@ -2026,11 +2027,11 @@ function colorName(color) {
 }
 
 function drawLevelOneSourcePanel(source) {
+  const fadeStart = LEVEL_ONE_OPENING_BLEND_START;
+  const fadeRows = levelOneSourcePanelCanvas.height - fadeStart;
   levelOneSourcePanelContext.clearRect(0, 0, 563, 756);
   levelOneSourcePanelContext.imageSmoothingEnabled = false;
   levelOneSourcePanelContext.drawImage(source, 0, 0, 563, 756);
-  const fadeStart = 732;
-  const fadeRows = levelOneSourcePanelCanvas.height - fadeStart;
   const bottom = levelOneSourcePanelContext.getImageData(0, fadeStart, 563, fadeRows);
   for (let y = 0; y < fadeRows; y += 1) {
     const alpha = Math.round((1 - y / (fadeRows - 1)) * 255);
@@ -2045,17 +2046,17 @@ function drawLevelOneSourcePanel(source) {
 
 function drawLevelOneBucketsUnderSourcePanel() {
   const { frame } = state.game.config;
-  const blendStart = 226 + 732;
+  const panelBlendStart = 226 + LEVEL_ONE_OPENING_BLEND_START;
   ctx.save();
   ctx.beginPath();
-  ctx.rect(frame.x, blendStart, frame.width, frame.y + frame.height - blendStart);
+  ctx.rect(frame.x, panelBlendStart, frame.width, frame.y + frame.height - panelBlendStart);
   ctx.clip();
   drawFramePanel(frame, state.game.config.wall);
   ctx.restore();
 
   ctx.save();
   ctx.beginPath();
-  ctx.rect(17, blendStart, 563, frame.y + frame.height - blendStart);
+  ctx.rect(17, panelBlendStart, 563, frame.y + frame.height - panelBlendStart);
   ctx.clip();
   drawBuckets();
   ctx.restore();
