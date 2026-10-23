@@ -26,6 +26,7 @@ const requestedPreviewLevel = Number(query.get('previewLevel'));
 const hasPreviewLevel = Number.isInteger(requestedPreviewLevel) && requestedPreviewLevel >= 1 && requestedPreviewLevel <= 13;
 const requestedPreviewReward = query.get('previewReward') === '1';
 const requestedSplashPreview = query.get('previewSplash') === '1';
+const loadingScreenDurationMs = 1783;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
 
 const COLORS_3D = {
@@ -89,6 +90,8 @@ const state = {
 };
 const levelPixelTileCache = new Map();
 const voxelSpriteCache = new Map();
+const startupSplashBoxImage = new Image();
+startupSplashBoxImage.src = '/assets/startup/splash-box.png';
 const levelOneBoardImage = new Image();
 levelOneBoardImage.src = '/assets/level1/level1-board.png';
 const levelOneSettingsGearImage = new Image();
@@ -312,23 +315,45 @@ function loadingVoxel(cx, cy, size, color, rotation = 0, shadow = true, paletteO
 
 function drawLoadingLogo() {
   const cx = SCREEN.width / 2;
-  const cy = 245;
+  const cy = 333;
+  const outerRx = 128.5;
+  const outerRy = 129.5;
+  const innerRx = 113;
+  const innerRy = 114;
   ctx.save();
-  ctx.shadowColor = '#001e4b99';
-  ctx.shadowBlur = 12;
+  ctx.shadowColor = '#082d5570';
+  ctx.shadowBlur = 15;
+  ctx.shadowOffsetY = 5;
   ctx.beginPath();
-  ctx.ellipse(cx, cy, 114, 118, 0, 0, Math.PI * 2);
-  ctx.fillStyle = gradient(cx - 100, cy - 112, cx + 100, cy + 116, [
-    [0, '#c5e9ff'], [0.18, '#435d7c'], [0.75, '#263e60'], [1, '#d3eaff'],
+  ctx.ellipse(cx, cy, outerRx, outerRy, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, cy, innerRx, innerRy, 0, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(cx, cy - outerRy, cx, cy + outerRy, [
+    [0, '#e0e5e8'], [0.12, '#8f9ba4'], [0.3, '#c5cdd2'],
+    [0.56, '#68747e'], [0.82, '#bbc4ca'], [1, '#707c86'],
   ]);
-  ctx.fill();
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = '#b7d9ef';
-  ctx.stroke();
+  ctx.fill('evenodd');
   ctx.restore();
 
-  const logoText = (text, y, size, fill, outline, width = 8) => {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, outerRx - 1, outerRy - 1, 0, 0, Math.PI * 2);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#d7dfe3';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, innerRx + 1, innerRy + 1, 0, 0, Math.PI * 2);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#50616d';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, outerRx - 5, outerRy - 5, 0, Math.PI * 1.08, Math.PI * 1.92);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff80';
+  ctx.stroke();
+
+  const logoText = (text, y, size, fill, outline, width = 8, scaleX = 1, offsetX = 0) => {
     ctx.save();
+    ctx.translate(cx + offsetX, y);
+    ctx.scale(scaleX, 1);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = `1000 ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
@@ -337,110 +362,178 @@ function drawLoadingLogo() {
     ctx.strokeStyle = '#321d2a';
     ctx.shadowColor = '#071b36';
     ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 9;
-    ctx.strokeText(text, cx, y + 5);
+    ctx.shadowOffsetY = 8;
+    ctx.strokeText(text, 0, 5);
     ctx.shadowColor = 'transparent';
     ctx.strokeStyle = outline;
-    ctx.strokeText(text, cx, y);
-    ctx.fillStyle = fill;
-    ctx.fillText(text, cx, y);
+    ctx.strokeText(text, 0, 0);
+    if (Array.isArray(fill)) {
+      const face = ctx.createLinearGradient(0, -size * 0.55, 0, size * 0.55);
+      fill.forEach(([stop, color]) => face.addColorStop(stop, color));
+      ctx.fillStyle = face;
+    } else {
+      ctx.fillStyle = fill;
+    }
+    ctx.fillText(text, 0, 0);
     ctx.restore();
   };
-  logoText('像素', 203, 60, '#76f125', '#155b31', 9);
-  logoText('方块', 266, 58, '#ff4834', '#7f241d', 9);
-  logoText('大闯关', 329, 48, '#fff4d8', '#a64016', 8);
-  loadingVoxel(194, 200, 50, 'magenta', -0.16);
-  loadingVoxel(402, 272, 51, 'green', 0.1);
-  loadingVoxel(158, 302, 54, 'blue', -0.12);
+  logoText('像素', 251, 59, [[0, '#aaff48'], [0.22, '#72f421'], [0.7, '#44d622'], [1, '#209c2b']], '#155b31', 9, 1.88, 4);
+  logoText('方块', 314, 67, [[0, '#ff796b'], [0.24, '#ff4537'], [0.72, '#e92b22'], [1, '#b81418']], '#7f241d', 9, 1.63, 7);
+  logoText('大闯关', 390, 89, [[0, '#fffef5'], [0.42, '#fff5df'], [0.78, '#ffdfa5'], [1, '#ffc76a']], '#a64016', 8, 0.86, -2);
+  loadingVoxel(198, 216, 46, 'magenta', -0.16);
+  loadingVoxel(429, 307, 51, 'green', 0.1);
+  loadingVoxel(167, 345, 52, 'blue', -0.12);
 }
 
-function drawLoadingBox(now) {
-  const shimmer = prefersReducedMotion.matches ? 0 : Math.sin(now / 380) * 2;
-  const left = 190;
-  const right = 407;
-  const top = 742 + shimmer;
-  const frontBottom = 895;
+function drawLoadingBox() {
+  if (startupSplashBoxImage.complete && startupSplashBoxImage.naturalWidth > 0) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(startupSplashBoxImage, 140, 660, 310, 295);
+    ctx.restore();
+    return;
+  }
+
+  const left = 201;
+  const right = 391;
+  const center = 298;
+  const backY = 710;
+  const rimY = 750;
+  const frontY = 802;
+  const bottomY = 902;
+
   ctx.save();
-  ctx.shadowColor = '#032b6388';
-  ctx.shadowBlur = 28;
-  ctx.shadowOffsetY = 16;
+  ctx.shadowColor = '#084f7b65';
+  ctx.shadowBlur = 23;
+  ctx.shadowOffsetY = 10;
   ctx.beginPath();
-  ctx.moveTo(left, top);
-  ctx.lineTo(298, top - 36);
-  ctx.lineTo(right, top);
-  ctx.lineTo(298, top + 44);
-  ctx.closePath();
-  ctx.fillStyle = gradient(0, top - 36, 0, top + 44, [[0, '#fff46a'], [0.55, '#ffc600'], [1, '#c98705']]);
+  ctx.ellipse(center, 884, 118, 25, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#0751816b';
   ctx.fill();
   ctx.restore();
 
   ctx.beginPath();
-  ctx.moveTo(left, top);
-  ctx.lineTo(298, top + 44);
-  ctx.lineTo(298, frontBottom);
-  ctx.lineTo(left + 10, frontBottom - 28);
+  ctx.moveTo(left + 1, rimY);
+  ctx.bezierCurveTo(left + 3, 785, left + 7, 822, left + 14, 845);
+  ctx.bezierCurveTo(235, 866, 262, 889, center - 9, bottomY - 2);
+  ctx.quadraticCurveTo(center - 2, bottomY + 3, center + 1, bottomY - 3);
+  ctx.lineTo(center + 1, frontY);
   ctx.closePath();
-  ctx.fillStyle = gradient(left, top, 298, top, [[0, '#ffcd16'], [0.55, '#f8a900'], [1, '#d78600']]);
+  ctx.fillStyle = gradient(left, 0, center, 0, [
+    [0, '#ffd619'], [0.42, '#ffc20a'], [0.78, '#f2a600'], [1, '#d88400'],
+  ]);
   ctx.fill();
+
   ctx.beginPath();
-  ctx.moveTo(298, top + 44);
-  ctx.lineTo(right, top);
-  ctx.lineTo(right - 6, frontBottom - 28);
-  ctx.lineTo(298, frontBottom);
+  ctx.moveTo(center, frontY);
+  ctx.lineTo(right - 1, rimY);
+  ctx.bezierCurveTo(right - 3, 787, right - 7, 825, right - 15, 846);
+  ctx.bezierCurveTo(354, 868, 327, 889, center + 8, bottomY - 2);
+  ctx.quadraticCurveTo(center + 2, bottomY + 2, center, bottomY - 3);
   ctx.closePath();
-  ctx.fillStyle = gradient(298, top, right, top, [[0, '#f8b700'], [0.55, '#e79b00'], [1, '#ba7100']]);
+  ctx.fillStyle = gradient(center, 0, right, 0, [
+    [0, '#ffc20b'], [0.52, '#f5a800'], [1, '#d98500'],
+  ]);
   ctx.fill();
-  ctx.lineWidth = 5;
-  ctx.strokeStyle = '#ffe95c';
-  ctx.stroke();
+
   ctx.beginPath();
-  ctx.moveTo(left + 9, top + 8);
-  ctx.lineTo(298, top + 50);
-  ctx.lineTo(right - 8, top + 8);
-  ctx.strokeStyle = '#fff47b';
-  ctx.lineWidth = 6;
-  ctx.stroke();
+  ctx.moveTo(left + 1, rimY);
+  ctx.quadraticCurveTo(left - 3, rimY - 2, left + 6, rimY - 7);
+  ctx.lineTo(center - 7, backY + 2);
+  ctx.quadraticCurveTo(center, backY - 1, center + 8, backY + 2);
+  ctx.lineTo(right - 4, rimY - 6);
+  ctx.quadraticCurveTo(right + 4, rimY - 2, right - 1, rimY + 3);
+  ctx.lineTo(center + 4, frontY + 7);
+  ctx.quadraticCurveTo(center, frontY + 10, center - 5, frontY + 6);
+  ctx.closePath();
+  ctx.fillStyle = gradient(0, backY, 0, frontY + 7, [
+    [0, '#fff05a'], [0.35, '#ffdb19'], [0.72, '#ffc30a'], [1, '#ec9c00'],
+  ]);
+  ctx.fill();
 
   const colors = ['blue', 'orange', 'red', 'green', 'magenta', 'purple', 'yellow'];
-  const cubes = [
-    [242, 707, 24], [274, 690, 27], [305, 704, 25], [337, 696, 26], [365, 714, 23],
-    [222, 728, 22], [255, 730, 24], [287, 722, 23], [320, 730, 25], [351, 735, 22], [383, 729, 23],
-    [230, 760, 22], [270, 767, 22], [306, 762, 22], [342, 767, 21], [375, 758, 21],
-    [167, 827, 24], [180, 854, 22], [426, 842, 24], [443, 870, 23], [226, 916, 25], [321, 924, 24], [370, 902, 24],
+  const pile = [
+    [265, 714, 21], [294, 704, 22], [324, 711, 21], [348, 723, 20],
+    [275, 710, 18], [337, 718, 18],
+    [242, 730, 21], [270, 735, 21], [299, 728, 21], [328, 734, 21], [355, 739, 20],
+    [238, 741, 18], [296, 739, 18],
+    [225, 749, 20], [253, 756, 21], [281, 747, 21], [310, 753, 21], [338, 755, 21], [367, 759, 19],
+    [228, 774, 20], [256, 780, 21], [284, 772, 20], [312, 779, 21], [340, 779, 20], [363, 784, 19],
+    [378, 767, 18], [298, 766, 18],
+    [243, 797, 20], [271, 801, 20], [299, 793, 21], [326, 798, 20], [350, 796, 19], [299, 809, 18],
   ];
-  cubes.forEach(([x, y, size], index) => loadingVoxel(x, y, size, colors[index % colors.length], ((index % 3) - 1) * 0.07));
+  pile.forEach(([x, y, size], index) => loadingVoxel(x, y, size, colors[index % colors.length], ((index % 3) - 1) * 0.07));
+
+  ctx.beginPath();
+  ctx.moveTo(left + 4, rimY - 1);
+  ctx.quadraticCurveTo(247, 775, center, frontY + 5);
+  ctx.quadraticCurveTo(346, 776, right - 3, rimY - 1);
+  ctx.strokeStyle = '#fff45a';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  const loose = [
+    [190, 821, 23, 'green'], [197, 847, 22, 'blue'], [218, 865, 22, 'red'], [237, 887, 22, 'orange'],
+    [398, 835, 22, 'magenta'], [372, 858, 23, 'blue'], [403, 875, 22, 'green'],
+    [322, 912, 22, 'magenta'], [345, 885, 22, 'purple'],
+  ];
+  loose.forEach(([x, y, size, color], index) => loadingVoxel(x, y, size, color, ((index % 3) - 1) * 0.08));
 }
 
 function drawLoadingScreen(now) {
-  ctx.fillStyle = gradient(0, 0, 0, SCREEN.height, [[0, '#0a3e83'], [0.5, '#0873c1'], [1, '#06386f']]);
+  ctx.fillStyle = gradient(0, 0, 0, SCREEN.height, [
+    [0, '#155fc5'], [0.33, '#1a70c5'], [0.68, '#2089bd'], [1, '#155889'],
+  ]);
   ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
-  const glow = ctx.createRadialGradient(298, 772, 22, 298, 772, 540);
-  glow.addColorStop(0, '#42d6ffbb');
-  glow.addColorStop(0.45, '#1f9de77a');
+  const glow = ctx.createRadialGradient(298, 775, 18, 298, 775, 520);
+  glow.addColorStop(0, '#5bdfffbd');
+  glow.addColorStop(0.42, '#40a9d46e');
   glow.addColorStop(1, '#0b4f9c00');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
   drawLoadingLogo();
-  drawLoadingBox(now);
+  drawLoadingBox();
 
-  const progress = state.loadingPreview ? 0.72 : Math.min(0.94, 0.18 + (now - state.loadingStartedAt) / 1800 * 0.72);
+  const progress = state.loadingPreview ? 0.82 : Math.min(0.94, 0.18 + (now - state.loadingStartedAt) / loadingScreenDurationMs * 0.72);
   ctx.save();
-  ctx.shadowColor = '#062d5faa';
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetY = 5;
-  roundedRect(105, 1094, 382, 34, 17);
-  ctx.fillStyle = gradient(0, 1094, 0, 1128, [[0, '#fff1a0'], [0.5, '#f6bf23'], [1, '#c47b03']]);
+  ctx.shadowColor = '#062d5f88';
+  ctx.shadowBlur = 9;
+  ctx.shadowOffsetY = 4;
+  roundedRect(126, 1064, 370, 44, 22);
+  ctx.fillStyle = gradient(0, 1064, 0, 1108, [[0, '#fff4a2'], [0.48, '#f8c329'], [1, '#c67d08']]);
   ctx.fill();
   ctx.restore();
-  roundedRect(112, 1101, 368, 20, 10);
-  ctx.fillStyle = '#7b4d11';
+  roundedRect(133, 1070, 356, 32, 16);
+  ctx.fillStyle = '#815111';
   ctx.fill();
-  roundedRect(115, 1104, 362 * progress, 14, 7);
-  ctx.fillStyle = gradient(0, 1104, 0, 1118, [[0, '#fff379'], [1, '#ffb819']]);
+  roundedRect(138, 1074, 347 * progress, 24, 12);
+  ctx.fillStyle = gradient(0, 1074, 0, 1098, [[0, '#fff67a'], [1, '#ffb91d']]);
   ctx.fill();
-  loadingVoxel(463, 1096, 44, 'yellow');
-  drawText('☺', 463, 1108, { size: 24, stroke: '#9e5b00', lineWidth: 2, shadow: '#9b5b00', shadowY: 1 });
-  drawText('正在加载游戏…', 298, 1057, { size: 24, stroke: '#17243a', lineWidth: 4, shadow: '#071a37', shadowY: 2 });
+
+  ctx.save();
+  ctx.shadowColor = '#70430077';
+  ctx.shadowBlur = 5;
+  ctx.shadowOffsetY = 3;
+  roundedRect(441, 1054, 55, 57, 19);
+  ctx.fillStyle = gradient(441, 1054, 496, 1111, [[0, '#ffe653'], [0.5, '#ffca20'], [1, '#e99a04']]);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#b66a09';
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#392516';
+  ctx.beginPath();
+  ctx.ellipse(458, 1075, 2.2, 3.3, 0, 0, Math.PI * 2);
+  ctx.ellipse(478, 1075, 2.2, 3.3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(468, 1081, 8, 0.18, Math.PI - 0.18);
+  ctx.strokeStyle = '#6a3c08';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  drawText('加载中…', 298, 1037, { size: 24, stroke: '#17243a', lineWidth: 4, shadow: '#071a37', shadowY: 2 });
 }
 
 function drawText(text, x, y, options = {}) {
@@ -2658,7 +2751,7 @@ function setCanvasDensity() {
 function frame(now) {
   const delta = Math.min(0.05, Math.max(0, (now - state.lastFrameAt) / 1000));
   state.lastFrameAt = now;
-  if (state.loading && !state.loadingPreview && now - state.loadingStartedAt >= 1800) {
+  if (state.loading && !state.loadingPreview && now - state.loadingStartedAt >= loadingScreenDurationMs) {
     state.loading = false;
     liveStatus.textContent = `第 ${initialLevel} 关开始`;
     canvas.setAttribute('aria-label', '拖动收集槽收集彩色像素方块');

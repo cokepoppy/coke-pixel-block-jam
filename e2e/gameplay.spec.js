@@ -101,6 +101,34 @@ async function pointOnCanvas(page, x, y) {
   };
 }
 
+function colorMaskBounds(image, roi, matches) {
+  const { data, info } = image;
+  let left = info.width;
+  let top = info.height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = roi.y; y < roi.y + roi.height; y += 1) {
+    for (let x = roi.x; x < roi.x + roi.width; x += 1) {
+      const offset = (y * info.width + x) * info.channels;
+      if (!matches(data[offset], data[offset + 1], data[offset + 2])) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+
+  return { left, top, right, bottom };
+}
+
+function expectBoundsNear(actual, reference, tolerance, label) {
+  for (const edge of ['left', 'top', 'right', 'bottom']) {
+    expect(Math.abs(actual[edge] - reference[edge]), `${label} ${edge}: ${actual[edge]} vs ${reference[edge]}`)
+      .toBeLessThanOrEqual(tolerance);
+  }
+}
+
 async function drag(page, fromX, fromY, toX, toY) {
   const from = await pointOnCanvas(page, fromX, fromY);
   const to = await pointOnCanvas(page, toX, toY);
@@ -539,6 +567,96 @@ test('启动页显示中文加载状态并自动进入第 1 关', async ({ page 
   await expect(page.getByRole('button', { name: '打开设置' })).toBeHidden();
   await expect(page.locator('#live-status')).toHaveText('第 1 关开始', { timeout: 5_000 });
   await expect(page.getByRole('button', { name: '打开设置' })).toBeVisible();
+});
+
+test('启动页徽标和黄盒边界逐项对齐原片首帧', async ({ page }, testInfo) => {
+  await page.goto('/?previewSplash=1');
+  await expect(page.locator('#live-status')).toHaveText('正在加载游戏');
+
+  const screenshotPath = testInfo.outputPath('startup-splash.png');
+  await page.locator('#game-canvas').screenshot({ path: screenshotPath });
+  await testInfo.attach('startup-splash-canvas', { path: screenshotPath, contentType: 'image/png' });
+  const pixels = await sharp(screenshotPath)
+    .resize(597, 1296, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Boundaries measured from the supplied recording at 00:00:00.5 after
+  // scaling its 1206 x 2622 frame to the 597 x 1296 game viewport. Text
+  // strokes differ by design because the webpage title is localized.
+  const sourceBounds = {
+    greenTitle: { left: 206, top: 222, right: 406, bottom: 277 },
+    redTitle: { left: 201, top: 282, right: 407, bottom: 364 },
+    creamTitle: { left: 190, top: 347, right: 407, bottom: 424 },
+    metalRing: { left: 170, top: 204, right: 426, bottom: 462 },
+    yellowBox: { left: 201, top: 740, right: 391, bottom: 901 },
+  };
+  const actualBounds = {
+    greenTitle: colorMaskBounds(pixels, { x: 180, y: 200, width: 250, height: 90 },
+      (r, g, b) => g > 160 && r < 150 && b < 130),
+    redTitle: colorMaskBounds(pixels, { x: 180, y: 275, width: 250, height: 90 },
+      (r, g, b) => r > 160 && g < 125 && b < 120),
+    creamTitle: colorMaskBounds(pixels, { x: 190, y: 335, width: 220, height: 100 },
+      (r, g, b) => r > 225 && g > 190 && b > 145),
+    metalRing: colorMaskBounds(pixels, { x: 150, y: 190, width: 300, height: 290 },
+      (r, g, b) => Math.abs(r - g) < 42 && Math.abs(g - b) < 48 && r > 75 && r < 225),
+    yellowBox: colorMaskBounds(pixels, { x: 140, y: 740, width: 320, height: 165 },
+      (r, g, b) => r > 180 && g > 115 && g > b * 1.35 && b < 115),
+  };
+
+  expectBoundsNear(actualBounds.greenTitle, sourceBounds.greenTitle, 2, '绿色标题');
+  expectBoundsNear(actualBounds.redTitle, sourceBounds.redTitle, 3, '红色标题');
+  expectBoundsNear(actualBounds.creamTitle, sourceBounds.creamTitle, 2, '浅色标题');
+  expectBoundsNear(actualBounds.metalRing, sourceBounds.metalRing, 2, '金属圆环');
+  expectBoundsNear(actualBounds.yellowBox, sourceBounds.yellowBox, 2, '黄色盒体');
+});
+
+test('启动页徽标与黄盒连续重绘保持稳定，不闪烁', async ({ page }) => {
+  await page.goto('/?previewSplash=1');
+  await expect(page.locator('#live-status')).toHaveText('正在加载游戏');
+  const region = { x: 130, y: 190, width: 340, height: 750 };
+  await page.evaluate(({ x, y, width, height }) => {
+    const canvas = document.querySelector('#game-canvas');
+    const scale = canvas.width / 597;
+    const pixels = canvas.getContext('2d').getImageData(
+      Math.round(x * scale), Math.round(y * scale),
+      Math.round(width * scale), Math.round(height * scale),
+    ).data;
+    window.__startupReferencePixels = new Uint8ClampedArray(pixels);
+  }, region);
+
+  const samples = [];
+  for (let index = 0; index < 5; index += 1) {
+    await page.waitForTimeout(100);
+    samples.push(await page.evaluate(({ x, y, width, height }) => {
+      const canvas = document.querySelector('#game-canvas');
+      const scale = canvas.width / 597;
+      const pixels = canvas.getContext('2d').getImageData(
+        Math.round(x * scale), Math.round(y * scale),
+        Math.round(width * scale), Math.round(height * scale),
+      ).data;
+      const reference = window.__startupReferencePixels;
+      let changedPixels = 0;
+      let maxChannelDelta = 0;
+      for (let pixel = 0; pixel < pixels.length; pixel += 4) {
+        let changed = false;
+        for (let channel = 0; channel < 3; channel += 1) {
+          const delta = Math.abs(pixels[pixel + channel] - reference[pixel + channel]);
+          maxChannelDelta = Math.max(maxChannelDelta, delta);
+          changed ||= delta !== 0;
+        }
+        if (changed) changedPixels += 1;
+      }
+      return { changedPixels, maxChannelDelta };
+    }, region));
+  }
+
+  expect(samples, 'sample five frames 100 ms apart').toHaveLength(5);
+  for (const sample of samples) {
+    expect(sample.changedPixels, 'logo and yellow-box ROI should not shimmer').toBe(0);
+    expect(sample.maxChannelDelta).toBe(0);
+  }
 });
 
 test('点击设置按钮后可继续游戏', async ({ page }) => {
