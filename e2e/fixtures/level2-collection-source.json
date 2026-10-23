@@ -1,0 +1,33 @@
+{
+  "source": "RPReplay_Final1792661235.MP4, decoded Level 2 sequence",
+  "frameSequence": ".research/events/level2-frame-sequence/frames",
+  "fps": 60,
+  "frameTimeOriginSeconds": 9.5,
+  "measurement": "Percent labels were read from the 60 fps frame sequence and checked against the six 10 fps contact sheets. Values are rounded as shown in the source UI. Drag start frames are inferred from the first visible bucket movement because the touch itself is not visible.",
+  "checkpoints": [
+    { "frame": 19, "timeSeconds": 9.8, "red": 0, "green": 0, "yellow": 0 },
+    { "frame": 61, "timeSeconds": 10.5, "red": 34, "green": 0, "yellow": 0 },
+    { "frame": 73, "timeSeconds": 10.7, "red": 51, "green": 0, "yellow": 0 },
+    { "frame": 85, "timeSeconds": 10.9, "red": 66, "green": 0, "yellow": 0 },
+    { "frame": 157, "timeSeconds": 12.1, "red": 81, "green": 0, "yellow": 0 },
+    { "frame": 163, "timeSeconds": 12.2, "red": 83, "green": 0, "yellow": 0 },
+    { "frame": 193, "timeSeconds": 12.7, "red": 87, "green": 25, "yellow": 0 },
+    { "frame": 199, "timeSeconds": 12.8, "red": 89, "green": 45, "yellow": 0 },
+    { "frame": 211, "timeSeconds": 13.0, "red": 90, "green": 72, "yellow": 0 },
+    { "frame": 217, "timeSeconds": 13.1, "red": 92, "green": 87, "yellow": 0 },
+    { "frame": 229, "timeSeconds": 13.3, "red": 93, "green": 100, "yellow": 0 },
+    { "frame": 277, "timeSeconds": 14.1, "red": 95, "green": 100, "yellow": 0, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 295, "timeSeconds": 14.4, "red": 95, "green": 100, "yellow": 0, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 331, "timeSeconds": 15.0, "red": 95, "green": 100, "yellow": 32, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 343, "timeSeconds": 15.2, "red": 98, "green": 100, "yellow": 59, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 355, "timeSeconds": 15.4, "red": 100, "green": 100, "yellow": 73, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 391, "timeSeconds": 16.0, "red": 100, "green": 100, "yellow": 81, "visibleBuckets": ["red", "yellow"] },
+    { "frame": 427, "timeSeconds": 16.6, "red": 100, "green": 100, "yellow": 90, "visibleBuckets": ["yellow"] },
+    { "frame": 457, "timeSeconds": 17.1, "red": 100, "green": 100, "yellow": 100, "visibleBuckets": ["yellow"] }
+  ],
+  "dragStarts": {
+    "redFrame": 13,
+    "greenFrame": 157,
+    "yellowFrame": 271
+  }
+}

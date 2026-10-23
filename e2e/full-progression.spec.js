@@ -124,6 +124,50 @@ async function playClearRoute(page, level, actions) {
       await page.mouse.up();
       await expect(page.locator('#live-status')).toContainText(`${color} 像素块，进度 100%`, { timeout: 5_000 });
     }
+  } else if (level === 2) {
+    const moveFor = async (from, to, durationMs) => {
+      const steps = Math.max(1, Math.round(durationMs / (1_000 / 60)));
+      const startedAt = Date.now();
+      for (let step = 1; step <= steps; step += 1) {
+        const dueAt = startedAt + (step / steps) * durationMs;
+        const delay = dueAt - Date.now();
+        if (delay > 0) await page.waitForTimeout(delay);
+        await page.mouse.move(
+          from.x + ((to.x - from.x) * step) / steps,
+          from.y + ((to.y - from.y) * step) / steps,
+        );
+      }
+    };
+    const dragTo = async (startPoint, targetPoint, durationMs = 100) => {
+      const start = browserPoint(startPoint);
+      const target = browserPoint(targetPoint);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      const gestureStartedAt = await page.evaluate(() => performance.now());
+      await moveFor(start, target, durationMs);
+      await page.mouse.up();
+      return gestureStartedAt;
+    };
+    const redStartedAt = await dragTo({ x: 450, y: 750 }, { x: 450, y: 550 });
+    const waitUntil = async (targetAt) => {
+      const delay = await page.evaluate((target) => target - performance.now(), targetAt);
+      if (delay > 0) await page.waitForTimeout(delay);
+    };
+    await waitUntil(redStartedAt + 2_400);
+    await dragTo({ x: 100, y: 750 }, { x: 100, y: 510 });
+    await waitUntil(redStartedAt + 4_300);
+    const yellowStartedAt = await dragTo({ x: 300, y: 875 }, { x: 199, y: 564 }, 400);
+    await waitUntil(yellowStartedAt + 1_900);
+    const yellowRegrab = browserPoint({ x: 199, y: 580 });
+    const yellowRight = browserPoint({ x: 399, y: 580 });
+    await page.mouse.move(yellowRegrab.x, yellowRegrab.y);
+    await page.mouse.down();
+    await moveFor(yellowRegrab, yellowRight, 600);
+    await page.mouse.up();
+    await waitUntil(yellowStartedAt + 3_300);
+    await expect.poll(() => page.locator('#game-canvas').evaluate((canvas) => (
+      ['red', 'green', 'yellow'].map((color) => Number(canvas.dataset[`progress${color[0].toUpperCase()}${color.slice(1)}`]))
+    ))).toEqual([100, 100, 100]);
   } else {
     for (const action of actions) {
       const start = browserPoint(action.point);
@@ -163,7 +207,7 @@ test('真实拖动连续清空 Level 1–13 并进入通关转场', async ({ pag
   await page.goto('/?previewLevel=1');
 
   for (let level = 1; level <= 13; level += 1) {
-    const actions = planFullClear(level);
+    const actions = level === 2 ? [] : planFullClear(level);
     await playClearRoute(page, level, actions);
   }
 

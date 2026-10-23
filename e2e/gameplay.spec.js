@@ -10,6 +10,10 @@ const levelTwoTransitionSource = JSON.parse(await readFile(
   new URL('./fixtures/level2-transition-source.json', import.meta.url),
   'utf8',
 ));
+const levelTwoCollectionSource = JSON.parse(await readFile(
+  new URL('./fixtures/level2-collection-source.json', import.meta.url),
+  'utf8',
+));
 const levelOneBoardPixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-board.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -200,6 +204,28 @@ async function dragAt60Hz(page, fromX, fromY, toX, toY, durationMs) {
       from.x + ((to.x - from.x) * step) / steps,
       from.y + ((to.y - from.y) * step) / steps,
     );
+  }
+  await page.mouse.up();
+}
+
+async function dragThroughAt60Hz(page, fromX, fromY, segments) {
+  let from = await pointOnCanvas(page, fromX, fromY);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (const { x, y, durationMs } of segments) {
+    const to = await pointOnCanvas(page, x, y);
+    const startedAt = Date.now();
+    const steps = Math.max(1, Math.round(durationMs / (1_000 / 60)));
+    for (let step = 1; step <= steps; step += 1) {
+      const dueAt = startedAt + (step / steps) * durationMs;
+      const delay = dueAt - Date.now();
+      if (delay > 0) await page.waitForTimeout(delay);
+      await page.mouse.move(
+        from.x + ((to.x - from.x) * step) / steps,
+        from.y + ((to.y - from.y) * step) / steps,
+      );
+    }
+    from = to;
   }
   await page.mouse.up();
 }
@@ -1749,7 +1775,7 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
     includeAA: false,
   });
   expect(panelDiff, `Level 2 opening panel differs at ${panelDiff} of ${openingPanel.info.width * openingPanel.info.height} pixels`).toBe(0);
-  expect(createGameState(2).config.pad.rows, 'Level 2 source frame has two operation-pad rows').toBe(2);
+  expect(createGameState(2).config.pad.rows, 'Level 2 source frame has four operation-pad rows').toBe(4);
   const actual = await sharp(screenshot)
     .extract({ left: 60, top: 344, width: 478, height: 176 })
     .ensureAlpha()
@@ -2170,28 +2196,129 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始', { timeout: 2_000 });
 });
 
-test('进入 Level 2 后可拖动 L 形槽收集阶梯图案', async ({ page }, testInfo) => {
+test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', async ({ page }, testInfo) => {
   test.setTimeout(30_000);
   await completeLevelOne(page);
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
 
-  await drag(page, 450, 750, 450, 365);
-  await expect(page.locator('#live-status')).toContainText('红色 像素块，进度 100%', { timeout: 5_000 });
+  await page.evaluate(() => {
+    const canvas = document.querySelector('#game-canvas');
+    window.__levelTwoBadgeHistory = [];
+    window.__levelTwoGestureStarts = [];
+    window.__levelTwoDropStatuses = [];
+    window.__levelTwoSourceFrameCaptures = {};
+    const sourceVideo = document.querySelector('#level-two-source-gameplay-video');
+    const frameCanvas = document.querySelector('#game-canvas');
+    const playSourceVideo = sourceVideo.play.bind(sourceVideo);
+    const alignedFrames = new Set([163, 229, 295, 331, 355, 391, 427, 457]);
+    const captureSourceFrame = (now, metadata) => {
+      const frame = Math.round(metadata.mediaTime * 60) + 1;
+      if (alignedFrames.has(frame) && !window.__levelTwoSourceFrameCaptures[frame]) {
+        const capture = {
+          frame,
+          mediaTime: metadata.mediaTime,
+          presentedFrames: metadata.presentedFrames,
+        };
+        sourceVideo.pause();
+        sourceVideo.play = () => Promise.resolve();
+        requestAnimationFrame(() => {
+          window.__levelTwoSourceFrameCaptures[frame] = {
+            ...capture,
+            capturedAt: performance.now(),
+            canvasPng: frameCanvas.toDataURL('image/png'),
+          };
+          sourceVideo.play = playSourceVideo;
+          void playSourceVideo().catch(() => {});
+          sourceVideo.requestVideoFrameCallback(captureSourceFrame);
+        });
+        return;
+      }
+      sourceVideo.requestVideoFrameCallback(captureSourceFrame);
+    };
+    sourceVideo.requestVideoFrameCallback(captureSourceFrame);
+    const liveStatus = document.querySelector('#live-status');
+    new MutationObserver(() => window.__levelTwoDropStatuses.push(liveStatus.textContent))
+      .observe(liveStatus, { childList: true, characterData: true, subtree: true });
+    canvas.addEventListener('pointerdown', () => {
+      window.__levelTwoGestureStarts.push(performance.now());
+    }, true);
+    const sampleProgress = () => {
+      const at = performance.now();
+      for (const color of ['green', 'red', 'yellow']) {
+        window.__levelTwoBadgeHistory.push({
+          frame: Math.round(at * 60 / 1_000),
+          at,
+          color,
+          value: Number(canvas.dataset[`progress${color[0].toUpperCase()}${color.slice(1)}`]),
+        });
+      }
+      requestAnimationFrame(sampleProgress);
+    };
+    requestAnimationFrame(sampleProgress);
+  });
 
-  const greenStart = await pointOnCanvas(page, 100, 750);
-  await page.mouse.move(greenStart.x, greenStart.y);
-  const greenTop = await pointOnCanvas(page, 100, 365);
-  await page.mouse.down();
-  await page.mouse.move(greenTop.x, greenTop.y, { steps: 36 });
-  const greenSweep = await pointOnCanvas(page, 220, 365);
-  await page.mouse.move(greenSweep.x, greenSweep.y, { steps: 18 });
-  await page.mouse.up();
-  await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 100%', { timeout: 5_000 });
+  const sourceFrameComparisons = [];
+  const captureSourceAlignedFrame = async (frame, label) => {
+    await page.waitForFunction((candidate) => Boolean(window.__levelTwoSourceFrameCaptures[candidate]), frame, {
+      timeout: 2_000,
+    });
+    const browserState = await page.evaluate((candidate) => {
+      const capture = window.__levelTwoSourceFrameCaptures[candidate];
+      return {
+        sourceFrame: capture.frame,
+        presentedFrames: capture.presentedFrames,
+        capturedAt: capture.capturedAt,
+        badges: window.__levelTwoBadgeHistory.slice(-3),
+        sourceWallTime: capture.mediaTime,
+        canvasPng: capture.canvasPng,
+      };
+    }, frame);
+    const canvasPath = testInfo.outputPath(`level2-canvas-${label}-${Math.round(browserState.capturedAt)}.png`);
+    await writeFile(canvasPath, Buffer.from(browserState.canvasPng.split(',')[1], 'base64'));
+    const checkpoint = levelTwoCollectionSource.checkpoints.find(({ frame: candidate }) => candidate === frame);
+    const comparison = {
+      sourceFrame: frame,
+      capturedFrame: browserState.sourceFrame,
+      sourceTimeSeconds: checkpoint?.timeSeconds,
+      label,
+      browserCapturedAt: browserState.capturedAt,
+      badgesBeforeScreenshot: browserState.badges,
+      sourceWallTime: browserState.sourceWallTime,
+      canvasPath,
+    };
+    sourceFrameComparisons.push(comparison);
+    return comparison;
+  };
+  const waitUntilPageTime = async (targetAt) => {
+    const delay = await page.evaluate((target) => target - performance.now(), targetAt);
+    if (delay > 0) await page.waitForTimeout(delay);
+  };
+
+  // The source red tray reaches x347/y533 in about 0.1 s, then fills in place.
+  // Keep the movement and the subsequent wait as separate real pointer phases.
+  await dragThroughAt60Hz(page, 450, 750, [{ x: 450, y: 550, durationMs: 100 }]);
+  const redGestureStartedAt = await page.evaluate(() => window.__levelTwoGestureStarts[0]);
+  await waitUntilPageTime(redGestureStartedAt + 2_375);
+
+  // Green rises to the source y493 position shown at its first collection frame.
+  await dragThroughAt60Hz(page, 100, 750, [{ x: 100, y: 510, durationMs: 100 }]);
+  const greenGestureStartedAt = await page.evaluate(() => window.__levelTwoGestureStarts[1]);
+  await captureSourceAlignedFrame(163, 'source-frame-0163-green-start-red-83');
+  await waitUntilPageTime(greenGestureStartedAt + 1_200);
+  await expect(page.locator('#live-status')).toContainText('绿色 100%', { timeout: 1_000 });
+  await captureSourceAlignedFrame(229, 'source-frame-0229-green-100-red-93');
+
+  // Yellow begins moving at about 14.0 s and reaches the wall by frame 0295;
+  // its first nonzero badge arrives at 15.0 s.
+  const yellowStartTime = redGestureStartedAt + 4_263;
+  const timeBeforeYellow = await page.evaluate((target) => target - performance.now(), yellowStartTime);
+  if (timeBeforeYellow > 0) await page.waitForTimeout(timeBeforeYellow);
+  await expect(page.locator('#live-status')).toContainText('红色 95%', { timeout: 500 });
 
   const yellowStart = await pointOnCanvas(page, 300, 875);
-  const yellowTop = await pointOnCanvas(page, 300, 380);
-  const yellowBottom = await pointOnCanvas(page, 300, 472);
-  const yellowSweep = await pointOnCanvas(page, 370, 472);
+  const yellowTop = await pointOnCanvas(page, 199, 564);
+  const yellowRegrab = await pointOnCanvas(page, 199, 580);
+  const yellowRight = await pointOnCanvas(page, 399, 580);
   await page.evaluate(() => {
     window.__levelTwoTransitionFrames = [];
     let transitionStartedAt = Number.NaN;
@@ -2221,13 +2348,153 @@ test('进入 Level 2 后可拖动 L 形槽收集阶梯图案', async ({ page }, 
     };
     requestAnimationFrame(sample);
   });
+  const moveLeg = async (from, to, durationMs) => {
+    const steps = Math.max(1, Math.round(durationMs / (1_000 / 60)));
+    const startedAt = Date.now();
+    for (let step = 1; step <= steps; step += 1) {
+      const dueAt = startedAt + (step / steps) * durationMs;
+      const delay = dueAt - Date.now();
+      if (delay > 0) await page.waitForTimeout(delay);
+      await page.mouse.move(
+        from.x + ((to.x - from.x) * step) / steps,
+        from.y + ((to.y - from.y) * step) / steps,
+      );
+    }
+  };
   await page.mouse.move(yellowStart.x, yellowStart.y);
   await page.mouse.down();
-  await page.mouse.move(yellowTop.x, yellowTop.y, { steps: 36 });
-  await page.mouse.move(yellowBottom.x, yellowBottom.y, { steps: 6 });
-  await page.mouse.move(yellowSweep.x, yellowSweep.y, { steps: 4 });
+  const yellowGestureStartedAt = await page.evaluate(() => window.__levelTwoGestureStarts[2]);
+  await moveLeg(yellowStart, yellowTop, 400);
+  await captureSourceAlignedFrame(295, 'source-frame-0295-yellow-at-wall-red-95');
   await page.mouse.up();
-  await expect(page.locator('#live-status')).toContainText('黄色 像素块，进度 100%', { timeout: 5_000 });
+  await waitUntilPageTime(yellowGestureStartedAt + 1_000);
+  await captureSourceAlignedFrame(331, 'source-frame-0331-yellow-32');
+  await waitUntilPageTime(yellowGestureStartedAt + 1_400);
+  await expect.poll(() => page.locator('#game-canvas').evaluate((canvas) => (
+    Number(canvas.dataset.progressRed)
+  ))).toBe(100);
+  await expect.poll(() => page.locator('#game-canvas').evaluate((canvas) => (
+    Number(canvas.dataset.progressYellow)
+  ))).toBeGreaterThanOrEqual(73);
+  await captureSourceAlignedFrame(355, 'source-frame-0355-red-100-yellow-73');
+
+  await waitUntilPageTime(yellowGestureStartedAt + 1_900);
+  await captureSourceAlignedFrame(391, 'source-frame-0391-yellow-resting-left');
+  await page.mouse.move(yellowRegrab.x, yellowRegrab.y);
+  await page.mouse.down();
+  await moveLeg(yellowRegrab, yellowRight, 600);
+  await captureSourceAlignedFrame(427, 'source-frame-0427-yellow-moving-right');
+  await page.mouse.up();
+  const yellowDropStatuses = await page.evaluate(() => window.__levelTwoDropStatuses);
+  expect(yellowDropStatuses.some((status) => status.includes('没有收集到黄色')),
+    'the yellow re-drag to the right source dock must be accepted').toBe(false);
+  await waitUntilPageTime(yellowGestureStartedAt + 3_100);
+  await captureSourceAlignedFrame(457, 'source-frame-0457-yellow-100');
+  await expect(page.locator('#live-status')).toContainText('100%', { timeout: 500 });
+
+  const progressHistory = await page.evaluate(() => window.__levelTwoBadgeHistory);
+  const gestureStarts = await page.evaluate(() => window.__levelTwoGestureStarts);
+  expect(gestureStarts, 'real pointer-down gestures should start the three fills and yellow re-drag')
+    .toHaveLength(4);
+  const sourceStartTime = {
+    red: levelTwoCollectionSource.frameTimeOriginSeconds
+      + ((levelTwoCollectionSource.dragStarts.redFrame - 1) / levelTwoCollectionSource.fps),
+    green: levelTwoCollectionSource.frameTimeOriginSeconds
+      + ((levelTwoCollectionSource.dragStarts.greenFrame - 1) / levelTwoCollectionSource.fps),
+    yellow: levelTwoCollectionSource.frameTimeOriginSeconds
+      + ((levelTwoCollectionSource.dragStarts.yellowFrame - 1) / levelTwoCollectionSource.fps),
+  };
+  const gestureStart = { red: gestureStarts[0], green: gestureStarts[1], yellow: gestureStarts[2] };
+  const progressComparisons = [];
+  for (const checkpoint of levelTwoCollectionSource.checkpoints) {
+    const targetElapsedMs = {
+      red: (checkpoint.timeSeconds - sourceStartTime.red) * 1_000,
+      green: (checkpoint.timeSeconds - sourceStartTime.green) * 1_000,
+      yellow: (checkpoint.timeSeconds - sourceStartTime.yellow) * 1_000,
+    };
+    for (const color of ['red', 'green', 'yellow']) {
+      if (checkpoint[color] === undefined || targetElapsedMs[color] < 0) continue;
+      if (checkpoint.visibleBuckets && !checkpoint.visibleBuckets.includes(color)) continue;
+      const targetAt = gestureStart[color] + targetElapsedMs[color];
+      const actual = progressHistory.reduce((best, group) => {
+        const entry = group.color === color ? group : null;
+        if (!entry) return best;
+        return !best || Math.abs(entry.at - targetAt) < Math.abs(best.at - targetAt) ? entry : best;
+      }, null);
+      if (!actual) continue;
+      const elapsedErrorMs = Math.abs(actual.at - targetAt);
+      const comparison = {
+        sourceFrame: checkpoint.frame,
+        sourceTimeSeconds: checkpoint.timeSeconds,
+        color,
+        expected: checkpoint[color],
+        actual: actual.value,
+        elapsedErrorMs,
+        progressError: Math.abs(actual.value - checkpoint[color]),
+      };
+      progressComparisons.push(comparison);
+    }
+  }
+  const panelRoi = { left: 17, top: 310, width: 563, height: 666 };
+  for (const comparison of sourceFrameComparisons) {
+    const sourceTime = levelTwoCollectionSource.frameTimeOriginSeconds + comparison.sourceWallTime;
+    const comparedFrame = Math.round(
+      (sourceTime - levelTwoCollectionSource.frameTimeOriginSeconds) * levelTwoCollectionSource.fps,
+    ) + 1;
+    expect(comparison.capturedFrame, `video frame callback should capture source frame ${comparison.sourceFrame}`)
+      .toBe(comparison.sourceFrame);
+    const sourcePath = fileURLToPath(new URL(
+      `./fixtures/level2-source-frames/frame-${String(comparedFrame).padStart(4, '0')}.png`,
+      import.meta.url,
+    ));
+    const source = await sharp(sourcePath).ensureAlpha().raw().toBuffer();
+    const canvas = await sharp(comparison.canvasPath).extract(panelRoi).ensureAlpha().raw().toBuffer();
+    const differentPixels = pixelmatch(source, canvas, Buffer.alloc(canvas.length), panelRoi.width, panelRoi.height, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    const sourceWall = await sharp(sourcePath).extract({ left: 43, top: 34, width: 478, height: 176 }).ensureAlpha().raw().toBuffer();
+    const canvasWall = await sharp(comparison.canvasPath).extract({ left: 60, top: 344, width: 478, height: 176 }).ensureAlpha().raw().toBuffer();
+    const wallDifferentPixels = pixelmatch(sourceWall, canvasWall, Buffer.alloc(canvasWall.length), 478, 176, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    comparison.comparedFrame = comparedFrame;
+    comparison.capturedSourceTime = sourceTime;
+    comparison.timeOffsetMs = (sourceTime - comparison.sourceTimeSeconds) * 1_000;
+    comparison.differentPixels = differentPixels;
+    comparison.differentPixelRatio = differentPixels / (panelRoi.width * panelRoi.height);
+    comparison.wallDifferentPixels = wallDifferentPixels;
+    comparison.wallDifferentPixelRatio = wallDifferentPixels / (478 * 176);
+    delete comparison.canvasPath;
+  }
+  await writeFile(testInfo.outputPath('level2-collection-frame-comparison.json'), `${JSON.stringify({
+    source: levelTwoCollectionSource.source,
+    sourceTimingReference: sourceStartTime,
+    actualGestureStarts: gestureStart,
+    progressComparisons,
+    sourceFrameComparisons,
+    sourceSamples: progressHistory,
+  }, null, 2)}\n`);
+  await testInfo.attach('level2-collection-frame-comparison.json', {
+    body: Buffer.from(JSON.stringify({ progressComparisons, sourceFrameComparisons }, null, 2)),
+    contentType: 'application/json',
+  });
+  console.log(`Level 2 source collection frames: ${JSON.stringify({ progressComparisons, sourceFrameComparisons })}`);
+  for (const comparison of progressComparisons) {
+    expect(comparison.elapsedErrorMs, `frame ${comparison.sourceFrame} ${comparison.color} capture time: ${JSON.stringify(comparison)}`)
+      .toBeLessThanOrEqual(35);
+    expect(comparison.progressError, `frame ${comparison.sourceFrame} ${comparison.color} badge: ${JSON.stringify(comparison)}`)
+      .toBeLessThanOrEqual(2);
+  }
+  for (const comparison of sourceFrameComparisons) {
+    expect(Math.abs(comparison.timeOffsetMs), `source frame ${comparison.sourceFrame} capture timing: ${JSON.stringify(comparison)}`)
+      .toBeLessThan(1);
+    expect(comparison.wallDifferentPixelRatio, `source frame ${comparison.sourceFrame} wall alignment: ${JSON.stringify(comparison)}`)
+      .toBeLessThan(0.125);
+    expect(comparison.differentPixelRatio, `source frame ${comparison.sourceFrame} panel alignment: ${JSON.stringify(comparison)}`)
+      .toBeLessThan(0.12);
+  }
 
   const transitionLayer = page.locator('#dialog-layer');
   const pendingAt = Number(await transitionLayer.getAttribute('data-transition-pending-started-at'));

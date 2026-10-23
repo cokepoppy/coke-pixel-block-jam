@@ -308,7 +308,7 @@ const levels = {
     frame: { x: 17, y: 312, width: 563, height: 665 },
     wall: { x: 42, y: 333, width: 513, height: 200 },
     grid: { x: 60, y: 344, width: 478, height: 176, cols: 37, rows: 14 },
-    pad: { x: 50, y: 555, cols: 5, rows: 2, cellWidth: 98, cellHeight: 94, gap: 4 },
+    pad: { x: 50, y: 555, cols: 5, rows: 4, cellWidth: 98, cellHeight: 94, gap: 4 },
     buckets: [
       { id: 'green', color: 'green', x: 50, y: 733, width: 201, height: 198, segments: [{ x: 0, y: 0, width: 201, height: 86 }, { x: 0, y: 45, width: 84, height: 153 }] },
       { id: 'red', color: 'red', x: 347, y: 733, width: 201, height: 198, segments: [{ x: 0, y: 0, width: 201, height: 86 }, { x: 117, y: 45, width: 84, height: 153 }] },
@@ -741,6 +741,9 @@ export function createGameState(level = 1) {
     collected: Object.fromEntries(COLORS.map((color) => [color, 0])),
     bucketTotals,
     bucketCollected: Object.fromEntries(buckets.map((bucket) => [bucket.id, 0])),
+    bucketDisplayedCollected: level === 2
+      ? Object.fromEntries(buckets.map((bucket) => [bucket.id, 0]))
+      : null,
     buckets,
     status: level === 1 ? 'tutorial' : 'playing',
     started: level !== 1,
@@ -771,7 +774,8 @@ export function getProgress(state, reference) {
     : reference?.id;
   if (bucketId && state.bucketTotals[bucketId] !== undefined) {
     const total = state.bucketTotals[bucketId];
-    return total ? Math.min(100, Math.round((state.bucketCollected[bucketId] / total) * 100)) : 100;
+    const collected = state.bucketDisplayedCollected?.[bucketId] ?? state.bucketCollected[bucketId];
+    return total ? Math.min(100, Math.round((collected / total) * 100)) : 100;
   }
   const color = typeof reference === 'string' ? reference : reference?.color;
   const total = state.totals[color] ?? 0;
@@ -806,7 +810,7 @@ export function collectAt(state, bucketId, x, y) {
     for (const next of state.buckets.filter((candidate) => candidate.requires === bucket.id && state.bucketTotals[candidate.id] > 0)) next.visible = true;
   }
   if (found.length) state.status = 'playing';
-  if (state.grid.every((cell) => cell === null)) state.status = 'won';
+  updateWinStatus(state);
   return found;
 }
 
@@ -825,7 +829,8 @@ export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY) {
   }
   if (bucketTotalsComplete(state, bucket.id) && bucket.hideWhenComplete) bucket.visible = false;
   for (const next of state.buckets.filter((candidate) => candidate.requires === bucket.id && state.bucketTotals[candidate.id] > 0)) next.visible = true;
-  if (state.grid.every((cell) => cell === null)) state.status = 'won';
+  if (state.bucketDisplayedCollected) state.bucketDisplayedCollected[bucket.id] = state.bucketCollected[bucket.id];
+  updateWinStatus(state);
   return found;
 }
 
@@ -865,8 +870,16 @@ export function collectAlongPath(state, bucketId, from, to) {
     bucket.y = from.y + (to.y - from.y) * ratio;
     collected.push(...collectAt(state, bucketId, bucket.x, bucket.y));
   }
-  if (state.grid.every((cell) => cell === null)) state.status = 'won';
+  updateWinStatus(state);
   return collected;
+}
+
+function updateWinStatus(state) {
+  if (!state.grid.every((cell) => cell === null)) return;
+  if (state.bucketDisplayedCollected && state.buckets.some((bucket) => (
+    state.bucketDisplayedCollected[bucket.id] < state.bucketTotals[bucket.id]
+  ))) return;
+  state.status = 'won';
 }
 
 export function updateClock(state, deltaSeconds) {

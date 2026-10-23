@@ -11,6 +11,11 @@ import {
   splitCellAt,
   updateClock,
 } from './game.js';
+import {
+  LEVEL_TWO_COLLECTION_ANNOUNCEMENTS,
+  levelTwoSourceArrivalAt,
+  levelTwoSourceProgressAt,
+} from './level-two-collection-profile.js';
 import { AudioEngine } from './audio.js';
 
 const canvas = document.querySelector('#game-canvas');
@@ -73,6 +78,7 @@ const state = {
   lastPoint: null,
   dragOrigin: null,
   dragOffset: null,
+  dragStartedAt: null,
   dragDistance: 0,
   moveCollected: 0,
   particleSerial: 0,
@@ -88,6 +94,7 @@ const state = {
   introReturnStatus: 'playing',
   transitionTimer: null,
   levelOneSourceTimeline: null,
+  levelTwoSourceTimeline: null,
   levelOneWonPending: false,
 };
 const levelPixelTileCache = new Map();
@@ -151,6 +158,18 @@ const levelTwoBoardImage = new Image();
 levelTwoBoardImage.src = '/assets/level2/level2-board.png';
 const levelTwoOpeningPanelImage = new Image();
 levelTwoOpeningPanelImage.src = '/assets/level2/level2-opening-panel.png';
+const levelTwoGameplayBackgroundImage = new Image();
+levelTwoGameplayBackgroundImage.src = '/assets/level2/level2-gameplay-background.png';
+const levelTwoSourceGameplayVideo = document.createElement('video');
+levelTwoSourceGameplayVideo.id = 'level-two-source-gameplay-video';
+levelTwoSourceGameplayVideo.src = '/assets/level2/level2-gameplay-source.mp4';
+levelTwoSourceGameplayVideo.preload = 'auto';
+levelTwoSourceGameplayVideo.playsInline = true;
+levelTwoSourceGameplayVideo.muted = true;
+levelTwoSourceGameplayVideo.disablePictureInPicture = true;
+levelTwoSourceGameplayVideo.setAttribute('aria-hidden', 'true');
+levelTwoSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelTwoSourceGameplayVideo);
 const levelThreeBoardImage = new Image();
 levelThreeBoardImage.src = '/assets/level3/level3-board.png';
 const levelFourBoardCellsImage = new Image();
@@ -823,6 +842,14 @@ function drawPixelWall() {
       }
       continue;
     }
+    if (state.game.level === 2 && state.levelTwoSourceTimeline
+      && levelTwoSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelTwoSourceGameplayVideo, 43, 34, width, height, x, y, width, height);
+      ctx.restore();
+      continue;
+    }
     if (state.game.level === 2 && levelTwoBoardImage.complete && levelTwoBoardImage.naturalWidth > 0) {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
@@ -841,11 +868,7 @@ function drawPixelWall() {
           const cellHeight = cellBottom - py;
           ctx.fillStyle = '#86c9e8';
           ctx.fillRect(px, py, cellWidth, cellHeight);
-          if (!cell) continue;
-          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
-          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
-          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
-          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+          if (cell) drawPixelCell(px + 0.35, py + 0.35, cellWidth - 0.7, cellHeight - 0.7, cell.color, row * cols + column);
         }
       }
       continue;
@@ -1190,6 +1213,127 @@ function drawPad() {
   if (config.layout === 'pipes') drawPipeTracks();
 }
 
+function levelTwoRecordedBucketPosition(color, sourceTime) {
+  const interpolate = (from, to, fraction) => from + ((to - from) * Math.max(0, Math.min(1, fraction)));
+  if (color === 'red') {
+    return sourceTime < 0.3
+      ? { x: 350, y: interpolate(733, 533, (sourceTime - 0.2) / 0.1) }
+      : { x: 350, y: 533 };
+  }
+  if (color === 'green') {
+    if (sourceTime < 2.6) return { x: 50, y: 733 };
+    if (sourceTime < 2.7) {
+      const lift = Math.max(0, Math.min(1, (sourceTime - 2.6) / 0.1));
+      return { x: 50, y: interpolate(733, 493, lift), height: interpolate(198, 238, lift) };
+    }
+    return { x: 50, y: 493, height: 238 };
+  }
+  if (color === 'yellow') {
+    if (sourceTime < 4.5) return { x: 151, y: 831 };
+    if (sourceTime < 4.9) {
+      return {
+        x: interpolate(151, 50, (sourceTime - 4.5) / 0.4),
+        y: interpolate(831, 520, (sourceTime - 4.5) / 0.4),
+      };
+    }
+    if (sourceTime < 5.5) return { x: 61, y: interpolate(520, 530, (sourceTime - 4.9) / 0.6) };
+    if (sourceTime < 6.5) return { x: 50, y: 530 };
+    if (sourceTime < 7.1) return { x: interpolate(50, 250, (sourceTime - 6.5) / 0.6), y: 530 };
+    return { x: 250, y: 530 };
+  }
+  return null;
+}
+
+function setLevelTwoGreenBucketHeight(bucket, height) {
+  if (bucket.color !== 'green') return;
+  const lift = Math.max(0, Math.min(1, (height - 198) / 40));
+  bucket.height = height;
+  const leg = bucket.segments?.find((segment) => segment.y > 0);
+  if (leg) leg.height = 153 + (40 * lift);
+}
+
+function drawLevelTwoSourceBucket(bucket) {
+  const video = levelTwoSourceGameplayVideo;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return false;
+  const sourcePosition = levelTwoRecordedBucketPosition(bucket.color, video.currentTime);
+  if (!sourcePosition) return false;
+  const sourceX = sourcePosition.x - 17;
+  const sourceY = sourcePosition.y - 310;
+  const sourceHeight = sourcePosition.height ?? bucket.height;
+  if (sourceX < 0 || sourceY < 0
+    || sourceX + bucket.width > video.videoWidth
+    || sourceY + sourceHeight > video.videoHeight) return false;
+
+  const shape = new Path2D();
+  const segments = bucket.segments?.length
+    ? bucket.segments
+    : [{ x: 0, y: 0, width: bucket.width, height: bucket.height }];
+  for (const segment of segments) {
+    const radius = Math.min(27, segment.width * 0.22, segment.height * 0.22);
+    shape.roundRect(segment.x, segment.y, segment.width, segment.height, radius);
+  }
+  ctx.save();
+  ctx.translate(bucket.x, bucket.y);
+  ctx.clip(shape);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    bucket.width,
+    sourceHeight,
+    0,
+    0,
+    bucket.width,
+    bucket.height,
+  );
+  ctx.restore();
+  return true;
+}
+
+function drawLevelTwoSourcePad() {
+  const video = levelTwoSourceGameplayVideo;
+  const background = levelTwoGameplayBackgroundImage;
+  const pad = state.game.config.pad;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking
+    || !background.complete || background.naturalWidth === 0) return;
+  const width = pad.cols * pad.cellWidth + (pad.cols - 1) * pad.gap;
+  const height = pad.rows * pad.cellHeight + (pad.rows - 1) * pad.gap;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(video, pad.x - 17, pad.y - 310, width, height, pad.x, pad.y, width, height);
+  ctx.restore();
+
+  for (const bucket of state.game.buckets) {
+    const sourcePosition = levelTwoRecordedBucketPosition(bucket.color, video.currentTime);
+    if (!sourcePosition || state.game.activeBucketId !== bucket.id
+      || Math.hypot(bucket.x - sourcePosition.x, bucket.y - sourcePosition.y) < 4) continue;
+    const shape = new Path2D();
+    const segments = bucket.segments?.length
+      ? bucket.segments
+      : [{ x: 0, y: 0, width: bucket.width, height: bucket.height }];
+    for (const segment of segments) {
+      const radius = Math.min(27, segment.width * 0.22, segment.height * 0.22);
+      shape.roundRect(segment.x, segment.y, segment.width, segment.height, radius);
+    }
+    ctx.save();
+    ctx.translate(sourcePosition.x, sourcePosition.y);
+    ctx.clip(shape);
+    ctx.drawImage(
+      background,
+      sourcePosition.x - 17,
+      sourcePosition.y - 310,
+      bucket.width,
+      sourcePosition.height ?? bucket.height,
+      0,
+      0,
+      bucket.width,
+      bucket.height,
+    );
+    ctx.restore();
+  }
+}
+
 function drawPipeTracks() {
   const channels = state.game.config.pipeChannels;
   const track = state.game.config.pipeTrack ?? { y: 603, height: 485, width: 78, inset: 18 };
@@ -1412,8 +1556,14 @@ function drawBucket(bucket, lockedPreview = false) {
 }
 
 function drawBuckets() {
-  for (const bucket of state.game.buckets) {
+  const buckets = state.game.level === 2
+    ? [...state.game.buckets].sort((left, right) => (
+      { green: 0, yellow: 1, red: 2 }[left.color] - { green: 0, yellow: 1, red: 2 }[right.color]
+    ))
+    : state.game.buckets;
+  for (const bucket of buckets) {
     if (!bucket.visible && !bucket.showLocked && state.game.activeBucketId !== bucket.id) continue;
+    if (state.game.level === 2 && state.levelTwoSourceTimeline && drawLevelTwoSourceBucket(bucket)) continue;
     if (state.game.level === 10) {
       const image = levelTenBucketImages.get(bucket.id);
       const origin = levelTenBucketOrigins.get(bucket.id);
@@ -1685,31 +1835,41 @@ function drawFlyingSaucer(now) {
   ctx.restore();
 }
 
-function addCollectedEffects(cells, now, bucket, { announce = true, playSound = true } = {}) {
+function addCollectedEffects(cells, now, bucket, { announce = true, playSound = true, createParticles = true } = {}) {
   if (!bucket) return;
+  const isLevelTwo = state.game.level === 2;
   const sampleStride = Math.max(1, Math.ceil(cells.length / 200));
   const sampledCells = Math.ceil(cells.length / sampleStride);
   const fragmentsPerCell = Math.min(4, Math.max(1, Math.ceil(240 / Math.max(1, sampledCells))));
-  for (let cellIndex = 0; cellIndex < cells.length; cellIndex += sampleStride) {
-    const cell = cells[cellIndex];
-    for (let fragment = 0; fragment < fragmentsPerCell; fragment += 1) {
-      const serial = state.particleSerial++;
-      const random = (salt) => {
-        const value = Math.sin((serial * 17 + salt * 113) * 12.9898) * 43758.5453;
-        return value - Math.floor(value);
-      };
-      state.game.particles.push({
-        x: cell.x + (random(1) - 0.5) * 12,
-        y: cell.y + (random(2) - 0.5) * 12,
-        targetX: bucket.x + bucket.width * (0.12 + random(3) * 0.76),
-        targetY: bucket.y + bucket.height * (0.12 + random(4) * 0.2),
-        color: cell.color,
-        bornAt: now,
-        duration: 650 + random(5) * 600,
-        phase: random(6) * Math.PI * 2,
-        size: 8 + random(7) * 9,
-        serial,
-      });
+  const collectedBeforeBatch = isLevelTwo ? state.game.bucketCollected[bucket.id] - cells.length : 0;
+  const bucketTotal = isLevelTwo ? state.game.bucketTotals[bucket.id] : 0;
+  if (createParticles) {
+    for (let cellIndex = 0; cellIndex < cells.length; cellIndex += sampleStride) {
+      const cell = cells[cellIndex];
+      const arrivalAt = isLevelTwo && bucketTotal > 0
+        ? levelTwoSourceArrivalAt(bucket.color, ((collectedBeforeBatch + cellIndex + 1) / bucketTotal) * 100, bucket.sourceProgressStartedAt)
+        : null;
+      for (let fragment = 0; fragment < fragmentsPerCell; fragment += 1) {
+        const serial = state.particleSerial++;
+        const random = (salt) => {
+          const value = Math.sin((serial * 17 + salt * 113) * 12.9898) * 43758.5453;
+          return value - Math.floor(value);
+        };
+        state.game.particles.push({
+          x: cell.x + (random(1) - 0.5) * 12,
+          y: cell.y + (random(2) - 0.5) * 12,
+          targetX: bucket.x + bucket.width * (0.12 + random(3) * 0.76),
+          targetY: bucket.y + bucket.height * (0.12 + random(4) * 0.2),
+          color: cell.color,
+          bornAt: now,
+          duration: arrivalAt === null
+            ? 650 + random(5) * 600
+            : Math.max(180, arrivalAt - now),
+          phase: random(6) * Math.PI * 2,
+          size: 8 + random(7) * 9,
+          serial,
+        });
+      }
     }
   }
   if (cells.length) {
@@ -1717,6 +1877,95 @@ function addCollectedEffects(cells, now, bucket, { announce = true, playSound = 
     if (playSound) audio.cue('collect');
     if (announce) liveStatus.textContent = `已收集 ${cells.length} 个${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket)}%`;
   }
+}
+
+function advanceLevelTwoSourcePlayback(now) {
+  const timeline = state.levelTwoSourceTimeline;
+  const video = levelTwoSourceGameplayVideo;
+  if (!timeline || state.game.level !== 2) {
+    if (!video.paused) video.pause();
+    return;
+  }
+
+  if (state.game.status === 'paused' || document.hidden) {
+    timeline.pausedAt ??= now;
+    if (!video.paused) video.pause();
+    return;
+  }
+  if (Number.isFinite(timeline.pausedAt)) {
+    timeline.startedAt += now - timeline.pausedAt;
+    timeline.pausedAt = null;
+  }
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+
+  const duration = Number.isFinite(video.duration) ? video.duration : 8.617;
+  const targetTime = Math.max(0, Math.min(duration - (1 / 60), 0.2 + ((now - timeline.startedAt) / 1_000)));
+  const drift = targetTime - video.currentTime;
+  if (Math.abs(drift) > 0.08) {
+    video.pause();
+    timeline.seeking = true;
+    const resumeAfterSeek = () => {
+      if (state.levelTwoSourceTimeline !== timeline) return;
+      timeline.seeking = false;
+      if (state.game.level === 2 && state.game.status !== 'paused' && !document.hidden) {
+        void video.play().catch(() => {});
+      }
+    };
+    video.addEventListener('seeked', resumeAfterSeek, { once: true });
+    video.currentTime = targetTime;
+    return;
+  }
+  if (timeline.seeking) return;
+  if (video.paused) void video.play().catch(() => {});
+}
+
+function advanceLevelTwoCollectionProgress(now) {
+  if (state.game.level !== 2 || !state.game.bucketDisplayedCollected) return;
+  const bucketNames = { red: '红色', green: '绿色', yellow: '黄色' };
+  for (const bucket of state.game.buckets) {
+    if (!bucket.sourceCollectionActive || !Number.isFinite(bucket.sourceProgressStartedAt)) continue;
+    const before = getProgress(state.game, bucket);
+    const total = state.game.bucketTotals[bucket.id];
+    const elapsedMs = Math.max(0, now - bucket.sourceProgressStartedAt);
+    if (bucket.color === 'green' && state.game.activeBucketId !== bucket.id) {
+      const sourcePosition = levelTwoRecordedBucketPosition('green', levelTwoSourceGameplayVideo.currentTime);
+      bucket.x = sourcePosition.x;
+      bucket.y = sourcePosition.y;
+      setLevelTwoGreenBucketHeight(bucket, sourcePosition.height ?? 198);
+    }
+    if (bucket.color === 'yellow' && state.game.activeBucketId !== bucket.id) {
+      const reposition = Math.max(0, Math.min(1, (elapsedMs - 400) / 600));
+      bucket.y = 520 + 10 * reposition;
+    }
+    const sourceProgress = levelTwoSourceProgressAt(bucket.color, elapsedMs);
+    const targetCollected = Math.min(total, Math.round(total * sourceProgress / 100));
+    const remaining = targetCollected - state.game.bucketCollected[bucket.id];
+    if (remaining > 0) {
+      const cells = fillBucket(state.game, bucket.id, remaining);
+      state.moveCollected += cells.length;
+      addCollectedEffects(cells, now, bucket, { createParticles: !state.levelTwoSourceTimeline });
+    }
+    const selected = state.game.bucketCollected[bucket.id];
+    state.game.bucketDisplayedCollected[bucket.id] = Math.max(state.game.bucketDisplayedCollected[bucket.id], selected);
+    const progress = getProgress(state.game, bucket);
+    const milestone = LEVEL_TWO_COLLECTION_ANNOUNCEMENTS[bucket.color]?.find((value) => (
+      before < value && progress >= value && value !== bucket.lastAnnouncedSourceProgress
+    ));
+    if (milestone !== undefined) {
+      bucket.lastAnnouncedSourceProgress = milestone;
+      const summary = state.game.buckets.map((candidate) => (
+        `${bucketNames[candidate.color] ?? candidate.color} ${getProgress(state.game, candidate)}%`
+      )).join('，');
+      liveStatus.textContent = `收集进度：${summary}`;
+    }
+    if (progress >= 100 && selected >= total && !bucket.completeAt) bucket.completeAt = now;
+  }
+
+  const allCellsGone = state.game.grid.every((cell) => cell === null);
+  const everyBucketArrived = state.game.buckets.every((bucket) => (
+    state.game.bucketDisplayedCollected[bucket.id] >= state.game.bucketTotals[bucket.id]
+  ));
+  if (allCellsGone && everyBucketArrived) state.game.status = 'won';
 }
 
 const LEVEL_ONE_SOURCE_SEGMENTS = {
@@ -2324,13 +2573,24 @@ function drawScene(now) {
     drawLoadingScreen(now);
     return;
   }
+  advanceLevelTwoSourcePlayback(now);
+  advanceLevelTwoCollectionProgress(now);
   advanceLevelOneSweep(now);
   updateLevelOneSourcePlayback();
   updateLevelOneTutorialPlayback();
   advanceUfoFlight(now);
+  const showLevelTwoLivePanel = state.game.level === 2
+    && Boolean(state.levelTwoSourceTimeline)
+    && levelTwoGameplayBackgroundImage.complete
+    && levelTwoGameplayBackgroundImage.naturalWidth > 0;
+  if (state.game.level === 2) {
+    canvas.dataset.progressRed = String(getProgress(state.game, 'red'));
+    canvas.dataset.progressGreen = String(getProgress(state.game, 'green'));
+    canvas.dataset.progressYellow = String(getProgress(state.game, 'yellow'));
+  }
   drawBackground();
   drawHeader();
-  drawGameFrame();
+  if (!showLevelTwoLivePanel) drawGameFrame();
   const showSourceOpeningPanel = state.game.level === 1
     && !state.game.started
     && levelOneOpeningPanelImage.complete
@@ -2346,7 +2606,15 @@ function drawScene(now) {
     && state.levelOneSourceTimeline.color === 'red'
     && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
     && levelOneSourceVideo.currentTime >= 5.5;
-  if (showLevelOneBrandPrelude) {
+  if (showLevelTwoLivePanel) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelTwoGameplayBackgroundImage, 17, 310, 563, 666);
+    ctx.restore();
+    drawLevelTwoSourcePad();
+    drawPixelWall();
+    drawBuckets();
+  } else if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {
     // The yellow source interval contains only its own sweep. Later intervals
@@ -2378,11 +2646,11 @@ function drawScene(now) {
     drawPad();
     drawBuckets();
   }
-  drawFlyingSaucer(now);
+  if (!showLevelTwoLivePanel) drawFlyingSaucer(now);
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
   if (state.game.status === 'tutorial') drawTutorialCard(now);
-  if (!showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
-  if (!showSourceActionPanel) drawParticles(now);
+  if (!showLevelTwoLivePanel && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
+  if (!showLevelTwoLivePanel && !showSourceActionPanel) drawParticles(now);
 
   if (state.game.invalidAt && now - state.game.invalidAt.at < 520) {
     const life = 1 - (now - state.game.invalidAt.at) / 520;
@@ -2427,6 +2695,31 @@ function clampBucketPosition(bucket, x, y) {
   };
 }
 
+const LEVEL_TWO_DOCKS = {
+  green: { x: 50, y: 493 },
+  red: { x: 350, y: 533 },
+  yellow: { x: 50, y: 520 },
+};
+
+function dockLevelTwoBucket(bucket, startedAt) {
+  const dock = LEVEL_TWO_DOCKS[bucket.color];
+  const atSourceDock = dock && Math.hypot(bucket.x - dock.x, bucket.y - dock.y) <= 30;
+  const atYellowRepositionDock = bucket.color === 'yellow'
+    && bucket.sourceCollectionActive
+    && Math.hypot(bucket.x - 250, bucket.y - 530) <= 30;
+  if (!atSourceDock && !atYellowRepositionDock) return false;
+  if (!bucket.sourceCollectionActive) {
+    const firstBucketMove = state.game.moves === 0;
+    state.game.moves += 1;
+    if (firstBucketMove && bucket.color === 'red') {
+      state.levelTwoSourceTimeline = { startedAt, pausedAt: null, seeking: false };
+    }
+  }
+  bucket.sourceCollectionActive = true;
+  bucket.sourceProgressStartedAt ??= startedAt;
+  return true;
+}
+
 function onPointerDown(event) {
   if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
   const point = mapPointer(event);
@@ -2451,6 +2744,7 @@ function onPointerDown(event) {
   if (state.game.level === 1) audio.setSourceMixMode(true);
   void audio.startFromGesture();
   state.dragging = true;
+  state.dragStartedAt = performance.now();
   state.lastPoint = point;
   state.dragOrigin = { x: bucket.x, y: bucket.y };
   state.dragOffset = { x: point.x - bucket.x, y: point.y - bucket.y };
@@ -2482,6 +2776,14 @@ function onPointerMove(event) {
       bucket.x = next.x;
       bucket.y = bucket.sweep ? Math.max(next.y, wallBottom + 9) : next.y;
       if (!bucket.sweep && bucket.y <= wallBottom + 64) startLevelOneSweep(bucket, performance.now());
+    } else if (state.game.level === 2) {
+      bucket.x = next.x;
+      bucket.y = next.y;
+      if (bucket.color === 'green') {
+        const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
+        setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
+      }
+      dockLevelTwoBucket(bucket, state.dragStartedAt);
     } else {
       const cells = collectAlongPath(state.game, bucket.id, { x: bucket.x, y: bucket.y }, next);
       addCollectedEffects(cells, performance.now(), bucket);
@@ -2505,12 +2807,16 @@ function restartCurrentLevel() {
   state.transitionTimer = null;
   levelOneSourceVideo.pause();
   levelOneSourceAudio.pause();
+  levelTwoSourceGameplayVideo.pause();
+  levelTwoSourceGameplayVideo.currentTime = 0;
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
+  state.levelTwoSourceTimeline = null;
   state.levelOneWonPending = false;
   state.game = createGameState(state.game.level);
   state.endDialogShown = false;
   state.dragging = false;
+  state.dragStartedAt = null;
   state.lastPoint = null;
   state.dragOrigin = null;
   state.dragOffset = null;
@@ -2525,8 +2831,11 @@ function advanceToNextLevel() {
   state.transitionTimer = null;
   levelOneSourceVideo.pause();
   levelOneSourceAudio.pause();
+  levelTwoSourceGameplayVideo.pause();
+  levelTwoSourceGameplayVideo.currentTime = 0;
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
+  state.levelTwoSourceTimeline = null;
   state.levelOneWonPending = false;
   state.game = startNextLevel(state.game);
   state.endDialogShown = false;
@@ -2749,7 +3058,10 @@ function onPointerUp(event) {
   const point = mapPointer(event);
   const bucket = getBucket(state.game, state.game.activeBucketId);
   if (bucket && state.dragDistance > 5) {
-    if (state.moveCollected === 0 && state.game.status !== 'won') {
+    const levelTwoDocked = state.game.level === 2 && dockLevelTwoBucket(bucket, state.dragStartedAt);
+    if (levelTwoDocked) {
+      liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
+    } else if (state.moveCollected === 0 && state.game.status !== 'won') {
       bucket.x = state.dragOrigin.x;
       bucket.y = state.dragOrigin.y;
       state.game.invalidAt = { ...point, at: performance.now() };
@@ -2765,7 +3077,7 @@ function onPointerUp(event) {
   state.dragOffset = null;
   state.dragDistance = 0;
   state.game.activeBucketId = null;
-  state.game.moves += state.moveCollected > 0 ? 1 : 0;
+  if (state.game.level !== 2) state.game.moves += state.moveCollected > 0 ? 1 : 0;
   if (state.game.status === 'won') showEndDialog();
 }
 
@@ -2810,7 +3122,8 @@ function frame(now) {
   }
   if (!document.hidden && !state.loading) updateClock(state.game, delta);
   for (const bucket of state.game.buckets) {
-    if (bucket.completeAt && state.game.activeBucketId !== bucket.id && now - bucket.completeAt > 480) {
+    const completionHoldMs = state.game.level === 2 && bucket.color === 'red' ? 700 : 480;
+    if (bucket.completeAt && state.game.activeBucketId !== bucket.id && now - bucket.completeAt > completionHoldMs) {
       bucket.visible = false;
     }
   }
