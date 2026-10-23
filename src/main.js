@@ -27,6 +27,8 @@ const hasPreviewLevel = Number.isInteger(requestedPreviewLevel) && requestedPrev
 const requestedPreviewReward = query.get('previewReward') === '1';
 const requestedSplashPreview = query.get('previewSplash') === '1';
 const loadingScreenDurationMs = 1783;
+const levelTwoWinSettleDurationMs = 900;
+const levelTwoTransitionDurationMs = 1200;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
 
 const COLORS_3D = {
@@ -2490,8 +2492,11 @@ function onPointerMove(event) {
 
 function closeDialog() {
   dialogLayer.hidden = true;
-  dialogLayer.classList.remove('reward-overlay', 'transition-overlay');
+  dialogLayer.classList.remove('reward-overlay', 'transition-overlay', 'transition-level-two');
   delete dialogLayer.dataset.transitionStartedAt;
+  delete dialogLayer.dataset.transitionPendingStartedAt;
+  delete dialogLayer.dataset.transitionProfile;
+  dialogLayer.style.removeProperty('--transition-duration');
   dialogLayer.replaceChildren();
 }
 
@@ -2594,20 +2599,65 @@ function showEndDialog() {
 }
 
 function showLevelTransition() {
-  const nextLevel = state.game.level + 1;
+  const sourceLevel = state.game.level;
+  if (sourceLevel === 2) {
+    dialogLayer.dataset.transitionPendingStartedAt = String(performance.now());
+    state.transitionTimer = globalThis.setTimeout(() => presentLevelTransition(sourceLevel), levelTwoWinSettleDurationMs);
+    return;
+  }
+  presentLevelTransition(sourceLevel);
+}
+
+function presentLevelTransition(sourceLevel) {
+  if (state.game.level !== sourceLevel || state.game.status !== 'won') return;
+  const nextLevel = sourceLevel + 1;
+  const transitionDurationMs = sourceLevel === 2 ? levelTwoTransitionDurationMs : 650;
+  const previewPath = nextLevel === 2
+    ? '/assets/level2/level2-opening-panel.png'
+    : nextLevel >= 3 && nextLevel <= 13
+      ? `/assets/transitions/level-${nextLevel}-opening.png`
+      : null;
+  const previewMarkup = previewPath
+    ? `<img class="${nextLevel === 2 ? 'transition-preview-panel' : 'transition-preview-screen'}" src="${previewPath}" alt="">`
+    : '';
+  dialogLayer.classList.toggle('transition-level-two', sourceLevel === 2);
   dialogLayer.classList.add('transition-overlay');
-  dialogLayer.dataset.transitionStartedAt = String(performance.now());
+  dialogLayer.dataset.transitionProfile = sourceLevel === 2 ? 'level2-source' : 'standard';
+  dialogLayer.style.setProperty('--transition-duration', `${transitionDurationMs}ms`);
+  if (sourceLevel !== 2) dialogLayer.dataset.transitionStartedAt = String(performance.now());
   dialogLayer.innerHTML = `
     <section class="level-transition" role="status" aria-live="polite" aria-label="正在进入第 ${nextLevel} 关">
-      <div class="transition-next-preview" aria-hidden="true"><img src="/assets/level2/level2-opening-panel.png" alt=""></div>
-      <div class="transition-ring" aria-hidden="true"></div>
-      <i class="transition-cube cube-purple" aria-hidden="true"></i>
-      <i class="transition-cube cube-blue" aria-hidden="true"></i>
-      <i class="transition-cube cube-green" aria-hidden="true"></i>
-      <h1 class="transition-logo" aria-hidden="true"><span>像素</span><span>方块</span><span>大闯关</span></h1>
+      <div class="transition-next-preview" aria-hidden="true">${previewMarkup}</div>
+      <div class="transition-brand" aria-hidden="true">
+        <div class="transition-ring"></div>
+        <i class="transition-cube cube-purple"></i>
+        <i class="transition-cube cube-blue"></i>
+        <i class="transition-cube cube-green"></i>
+        <h1 class="transition-logo"><span>像素</span><span>方块</span><span>大闯关</span></h1>
+      </div>
     </section>`;
   dialogLayer.hidden = false;
-  state.transitionTimer = globalThis.setTimeout(advanceToNextLevel, 650);
+  if (sourceLevel === 2) {
+    const startLevelTwoTimeline = () => {
+      const brand = dialogLayer.querySelector('.transition-brand');
+      if (!brand || state.game.level !== sourceLevel || state.game.status !== 'won') return;
+      const animation = brand.getAnimations().find(({ animationName }) => animationName === 'transition-level-two-brand');
+      const animationStartAt = animation?.startTime;
+      if (animation && !Number.isFinite(animationStartAt)) {
+        requestAnimationFrame(startLevelTwoTimeline);
+        return;
+      }
+      const startedAt = Number.isFinite(animationStartAt)
+        ? animationStartAt
+        : performance.now();
+      dialogLayer.dataset.transitionStartedAt = String(startedAt);
+      const elapsedMs = performance.now() - startedAt;
+      state.transitionTimer = globalThis.setTimeout(advanceToNextLevel, Math.max(0, transitionDurationMs - elapsedMs));
+    };
+    requestAnimationFrame(startLevelTwoTimeline);
+    return;
+  }
+  state.transitionTimer = globalThis.setTimeout(advanceToNextLevel, transitionDurationMs);
 }
 
 function showFeatureReward() {

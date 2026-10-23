@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node scripts/dev-server.mjs",
     "test:e2e": "playwright test",
-    "compare:reference": "node scripts/compare-reference.mjs"
+    "compare:reference": "node scripts/compare-reference.mjs",
+    "analyze:level2-transition": "node scripts/analyze-level2-transition-source.mjs",
+    "render:transition-previews": "node scripts/render-transition-previews.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

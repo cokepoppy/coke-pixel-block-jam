@@ -519,11 +519,18 @@ body {
   opacity: 1;
 }
 
+.transition-brand {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  transform-origin: 50% 50%;
+}
+
 .transition-next-preview {
   position: absolute;
   inset: 0;
   clip-path: circle(0 at 50% 50%);
-  animation: transition-reveal 650ms linear both;
+  animation: transition-reveal var(--transition-duration, 650ms) linear both;
 }
 
 .transition-next-preview img {
@@ -534,6 +541,12 @@ body {
   width: 563px;
   height: 666px;
   image-rendering: auto;
+}
+
+.transition-next-preview .transition-preview-screen {
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .transition-ring {
@@ -548,7 +561,7 @@ body {
   border-radius: 50%;
   background: radial-gradient(circle at 36% 25%, #263a55, #0c1c34 70%);
   box-shadow: inset 0 0 0 7px #ffffff8c, inset 0 -9px 15px #06152e, 0 8px 18px #073c6b88;
-  animation: transition-ring-shrink 650ms linear both;
+  animation: transition-ring-shrink var(--transition-duration, 650ms) linear both;
 }
 
 .transition-logo {
@@ -565,7 +578,7 @@ body {
   line-height: .72;
   letter-spacing: -.08em;
   -webkit-text-stroke: 2px #492916;
-  animation: transition-shrink 650ms linear both;
+  animation: transition-shrink var(--transition-duration, 650ms) linear both;
 }
 
 .transition-cube {
@@ -577,7 +590,7 @@ body {
   border: 2px solid #ffffff80;
   border-radius: 8px;
   box-shadow: inset 0 4px 0 #ffffff66, inset 0 -5px 0 #0003, 0 5px 0 #0004, 0 8px 12px #061b3666;
-  animation: transition-cube-shrink 650ms linear both;
+  animation: transition-cube-shrink var(--transition-duration, 650ms) linear both;
 }
 
 .cube-purple {
@@ -643,6 +656,24 @@ body {
   transform: translate(-2.18vw, -.67vw) scaleX(1.05);
 }
 
+#dialog-layer[data-transition-profile="level2-source"] .transition-brand {
+  animation: transition-level-two-brand var(--transition-duration) linear both;
+}
+
+#dialog-layer[data-transition-profile="level2-source"] .transition-logo,
+#dialog-layer[data-transition-profile="level2-source"] .transition-cube,
+#dialog-layer[data-transition-profile="level2-source"] .transition-ring {
+  animation: none;
+}
+
+#dialog-layer[data-transition-profile="level2-source"] .transition-ring {
+  width: min(36vw, 215px);
+}
+
+#dialog-layer[data-transition-profile="level2-source"] .transition-next-preview {
+  animation-name: transition-level-two-reveal;
+}
+
 /* Hold the completed badge, shrink it, then open the next board from its centre. */
 @keyframes transition-shrink {
   0%, 38.5% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -680,6 +711,88 @@ body {
   100% { clip-path: circle(160% at 50% 50%); }
 }
 
+@keyframes transition-level-two-brand {
+  0% { opacity: 1; transform: scale(0.4575); }
+  1.3917% { opacity: 1; transform: scale(0.6336); }
+  2.775% { opacity: 1; transform: scale(0.6336); }
+  4.1667% { opacity: 1; transform: scale(0.7324); }
+  5.5583% { opacity: 1; transform: scale(0.7324); }
+  6.9417% { opacity: 1; transform: scale(0.7324); }
+  8.3333% { opacity: 1; transform: scale(0.8197); }
+  9.725% { opacity: 1; transform: scale(0.8998); }
+  11.1083% { opacity: 1; transform: scale(0.8998); }
+  12.5% { opacity: 1; transform: scale(0.9853); }
+  13.8917% { opacity: 1; transform: scale(0.9853); }
+  15.275% { opacity: 1; transform: scale(1.0171); }
+  16.6667% { opacity: 1; transform: scale(1.0171); }
+  18.0583% { opacity: 1; transform: scale(1.0171); }
+  19.4417% { opacity: 1; transform: scale(1.0252); }
+  20.8333% { opacity: 1; transform: scale(1.0175); }
+  22.225% { opacity: 1; transform: scale(1.0175); }
+  23.6083% { opacity: 1; transform: scale(1.0021); }
+  25% { opacity: 1; transform: scale(1.0021); }
+  26.3917% { opacity: 1; transform: scale(0.9944); }
+  27.775% { opacity: 1; transform: scale(0.9944); }
+  29.1667% { opacity: 1; transform: scale(0.9944); }
+  30.5583% { opacity: 1; transform: scale(0.9941); }
+  31.9417% { opacity: 1; transform: scale(0.9941); }
+  33.3333% { opacity: 1; transform: scale(0.9941); }
+  34.725% { opacity: 1; transform: scale(1); }
+  36.1083% { opacity: 1; transform: scale(1); }
+  37.5% { opacity: 1; transform: scale(1.0018); }
+  38.8917% { opacity: 1; transform: scale(1.0018); }
+  40.275% { opacity: 1; transform: scale(1.0018); }
+  41.6667% { opacity: 1; transform: scale(1.0018); }
+  43.0583% { opacity: 1; transform: scale(1.0018); }
+  44.4417% { opacity: 1; transform: scale(1.0018); }
+  45.8333% { opacity: 1; transform: scale(1.0018); }
+  47.225% { opacity: 1; transform: scale(1.0018); }
+  48.6083% { opacity: 1; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1); }
+  51.3917% { opacity: 1; transform: scale(1); }
+  52.775% { opacity: 1; transform: scale(1.0018); }
+  54.1667% { opacity: 1; transform: scale(1.0018); }
+  55.5583% { opacity: 1; transform: scale(0.992); }
+  56.9417% { opacity: 1; transform: scale(0.992); }
+  58.3333% { opacity: 1; transform: scale(1.0052); }
+  59.725% { opacity: 1; transform: scale(1.0255); }
+  61.1083% { opacity: 1; transform: scale(1.0255); }
+  62.5% { opacity: 1; transform: scale(0.9793); }
+  63.8917% { opacity: 1; transform: scale(0.9793); }
+  65.275% { opacity: 1; transform: scale(0.9793); }
+  66.6667% { opacity: 1; transform: scale(0.8114); }
+  68.0583% { opacity: 1; transform: scale(0.5841); }
+  69.4417% { opacity: 1; transform: scale(0.5841); }
+  70.8333% { opacity: 1; transform: scale(0.3942); }
+  72.225% { opacity: 1; transform: scale(0.3942); }
+  73.6083% { opacity: 1; transform: scale(0.2356); }
+  75% { opacity: 1; transform: scale(0.2356); }
+  76.3917% { opacity: 1; transform: scale(0.2356); }
+  77.775% { opacity: 1; transform: scale(0.1054); }
+  79.1667% { opacity: 1; transform: scale(0.0325); }
+  80.5583% { opacity: 1; transform: scale(0.0325); }
+  81.9417% { opacity: 0; transform: scale(0); }
+  100% { opacity: 0; transform: scale(0); }
+}
+
+@keyframes transition-level-two-reveal {
+  0% { clip-path: circle(0 at 50% 50%); }
+  81.9417% { clip-path: circle(10.11% at 50% 50%); }
+  83.3333% { clip-path: circle(10.11% at 50% 50%); }
+  84.725% { clip-path: circle(18.63% at 50% 50%); }
+  86.1083% { clip-path: circle(18.63% at 50% 50%); }
+  87.5% { clip-path: circle(18.63% at 50% 50%); }
+  88.8917% { clip-path: circle(30.33% at 50% 50%); }
+  90.275% { clip-path: circle(43.41% at 50% 50%); }
+  91.6667% { clip-path: circle(43.41% at 50% 50%); }
+  93.0583% { clip-path: circle(43.41% at 50% 50%); }
+  94.4417% { clip-path: circle(57.88% at 50% 50%); }
+  95.8333% { clip-path: circle(70.17% at 50% 50%); }
+  97.225% { clip-path: circle(70.17% at 50% 50%); }
+  98.6083% { clip-path: circle(70.17% at 50% 50%); }
+  100% { clip-path: circle(160% at 50% 50%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
   .reward-title,
@@ -688,12 +801,14 @@ body {
   .reward-confetti-piece,
   .transition-ring,
   .transition-logo,
+  .transition-brand,
   .transition-cube,
   .transition-next-preview { animation: none !important; }
   .reward-meter-fill { transform: scaleX(.83); }
   .reward-confetti-piece { display: none; }
   .transition-ring,
   .transition-logo,
+  .transition-brand,
   .transition-cube { opacity: 0; }
   .transition-next-preview { clip-path: circle(160% at 50% 50%); }
 }

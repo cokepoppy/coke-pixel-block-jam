@@ -1,11 +1,15 @@
 import { expect, test } from '@playwright/test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 import { createGameState } from '../src/game.js';
 
 const levelOneOpeningBlendStart = 696;
+const levelTwoTransitionSource = JSON.parse(await readFile(
+  new URL('./fixtures/level2-transition-source.json', import.meta.url),
+  'utf8',
+));
 const levelOneBoardPixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-board.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -807,6 +811,69 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
   }
   expect(new Set(endedTrayHashes).size, 'the yellow tray should stop changing after the one-shot tutorial gesture ends')
     .toBe(1);
+});
+
+test('Level 1 冷启动手势自然播放一次后停住，黄色槽不闪回', async ({ page }) => {
+  await page.addInitScript(() => {
+    const probe = window.__pbjTutorialPlaybackProbe = {
+      playRequests: 0,
+      endedEvents: 0,
+      samples: [],
+      endedAt: null,
+    };
+    const originalPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function play(...args) {
+      if (this.id === 'level-one-tutorial-video') probe.playRequests += 1;
+      return originalPlay.apply(this, args);
+    };
+    const attach = (video) => {
+      if (video.dataset.playbackProbeAttached) return;
+      video.dataset.playbackProbeAttached = 'true';
+      video.addEventListener('ended', () => {
+        probe.endedEvents += 1;
+        probe.endedAt = performance.now();
+      });
+      const canvas = document.querySelector('#game-canvas');
+      const sample = () => {
+        if (canvas?.width === 597 && canvas.height === 1296) {
+          const pixels = canvas.getContext('2d').getImageData(157, 738, 285, 260).data;
+          let hash = 2_166_136_261;
+          for (const value of pixels) hash = Math.imul(hash ^ value, 16_777_619);
+          probe.samples.push({ time: video.currentTime, ended: video.ended, hash: hash >>> 0 });
+        }
+        if (probe.endedAt === null || performance.now() - probe.endedAt < 360) {
+          requestAnimationFrame(sample);
+        }
+      };
+      requestAnimationFrame(sample);
+    };
+    const observer = new MutationObserver(() => {
+      const video = document.querySelector('#level-one-tutorial-video');
+      if (video) attach(video);
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  });
+  await page.reload();
+
+  const tutorialVideo = page.locator('#level-one-tutorial-video');
+  await expect.poll(() => tutorialVideo.evaluate((video) => video.ended && video.paused), { timeout: 5_000 }).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => (
+    window.__pbjTutorialPlaybackProbe?.samples.some(({ ended }) => ended)
+      && window.__pbjTutorialPlaybackProbe.endedAt !== null
+      && performance.now() - window.__pbjTutorialPlaybackProbe.endedAt >= 300
+  )), { timeout: 2_000 }).toBeTruthy();
+
+  const playback = await page.evaluate(() => window.__pbjTutorialPlaybackProbe);
+  const times = playback.samples.map(({ time }) => time);
+  const backwardsFrames = times.slice(1).filter((time, index) => time + 0.001 < times[index]).length;
+  const endedSamples = playback.samples.filter(({ ended }) => ended);
+  expect(playback.playRequests, 'the cold-start tutorial should request playback only once').toBe(1);
+  expect(playback.endedEvents, 'the one-shot gesture should emit a single ended event').toBe(1);
+  expect(backwardsFrames, 'the tutorial video must not jump back to its first frame').toBe(0);
+  expect(Math.max(...times), 'natural playback should reach the 26-frame source endpoint').toBeGreaterThanOrEqual(25 / 60 - 0.002);
+  expect(endedSamples.length, 'keep sampling the panel after natural playback ends').toBeGreaterThanOrEqual(12);
+  expect(new Set(endedSamples.slice(-8).map(({ hash }) => hash)).size,
+    'the yellow slot and its surrounding panel must remain pixel-stable after the hand stops').toBe(1);
 });
 
 test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', async ({ page }, testInfo) => {
@@ -1695,6 +1762,26 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   expect(diff, `Level 2 board changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
 });
 
+test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ page }) => {
+  for (let level = 3; level <= 13; level += 1) {
+    await page.goto(`/?previewLevel=${level}`);
+    await page.waitForTimeout(500);
+    const screenshot = await page.locator('#game-canvas').screenshot();
+    const actual = await sharp(screenshot).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const expected = await sharp(fileURLToPath(new URL(`../assets/transitions/level-${level}-opening.png`, import.meta.url)))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(expected.info.width, `level ${level} preview width`).toBe(597);
+    expect(expected.info.height, `level ${level} preview height`).toBe(1296);
+    const diff = pixelmatch(expected.data, actual.data, Buffer.alloc(actual.data.length), 597, 1296, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    expect(diff, `level ${level} transition preview should match its opening canvas`).toBe(0);
+  }
+});
+
 test('Level 3 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   await page.goto('/?previewLevel=3');
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -2083,10 +2170,13 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始', { timeout: 2_000 });
 });
 
-test('进入 Level 2 后可拖动 L 形槽收集阶梯图案', async ({ page }) => {
+test('进入 Level 2 后可拖动 L 形槽收集阶梯图案', async ({ page }, testInfo) => {
   test.setTimeout(30_000);
   await completeLevelOne(page);
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
+
+  await drag(page, 450, 750, 450, 365);
+  await expect(page.locator('#live-status')).toContainText('红色 像素块，进度 100%', { timeout: 5_000 });
 
   const greenStart = await pointOnCanvas(page, 100, 750);
   await page.mouse.move(greenStart.x, greenStart.y);
@@ -2096,21 +2186,171 @@ test('进入 Level 2 后可拖动 L 形槽收集阶梯图案', async ({ page }) 
   const greenSweep = await pointOnCanvas(page, 220, 365);
   await page.mouse.move(greenSweep.x, greenSweep.y, { steps: 18 });
   await page.mouse.up();
+  await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 100%', { timeout: 5_000 });
 
   const yellowStart = await pointOnCanvas(page, 300, 875);
   const yellowTop = await pointOnCanvas(page, 300, 380);
   const yellowBottom = await pointOnCanvas(page, 300, 472);
   const yellowSweep = await pointOnCanvas(page, 370, 472);
+  await page.evaluate(() => {
+    window.__levelTwoTransitionFrames = [];
+    let transitionStartedAt = Number.NaN;
+    const sample = () => {
+      const overlay = document.querySelector('#dialog-layer[data-transition-profile="level2-source"]');
+      const brand = overlay?.querySelector('.transition-brand');
+      const preview = overlay?.querySelector('.transition-next-preview');
+      const animation = brand?.getAnimations().find(({ animationName }) => animationName === 'transition-level-two-brand');
+      const elapsedMs = Number(animation?.currentTime);
+      const dataStartedAt = Number(overlay?.dataset.transitionStartedAt);
+      if (Number.isFinite(dataStartedAt)) transitionStartedAt = dataStartedAt;
+      if (brand && preview && Number.isFinite(elapsedMs)) {
+        const brandStyle = getComputedStyle(brand);
+        const transform = new DOMMatrixReadOnly(brandStyle.transform);
+        const radius = /circle\(([\d.]+)(%|px)/u.exec(getComputedStyle(preview).clipPath);
+        window.__levelTwoTransitionFrames.push({
+          elapsedMs,
+          logoScale: Math.hypot(transform.a, transform.b),
+          logoOpacity: Number(brandStyle.opacity),
+          revealRadiusPercent: radius?.[2] === '%'
+            ? Number(radius[1])
+            : radius ? (Number(radius[1]) / (Math.hypot(innerWidth, innerHeight) / Math.SQRT2)) * 100 : 0,
+        });
+      }
+      if (Number.isFinite(transitionStartedAt) && performance.now() - transitionStartedAt >= 1_210) return;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   await page.mouse.move(yellowStart.x, yellowStart.y);
   await page.mouse.down();
   await page.mouse.move(yellowTop.x, yellowTop.y, { steps: 36 });
   await page.mouse.move(yellowBottom.x, yellowBottom.y, { steps: 6 });
   await page.mouse.move(yellowSweep.x, yellowSweep.y, { steps: 4 });
   await page.mouse.up();
-  await drag(page, 450, 750, 450, 365);
+  await expect(page.locator('#live-status')).toContainText('黄色 像素块，进度 100%', { timeout: 5_000 });
 
+  const transitionLayer = page.locator('#dialog-layer');
+  const pendingAt = Number(await transitionLayer.getAttribute('data-transition-pending-started-at'));
+  expect(Number.isFinite(pendingAt), 'Level 2 win should begin its source-matched settle interval').toBeTruthy();
+  await expect(transitionLayer).toBeHidden();
+  await expect(page.locator('.transition-overlay')).toBeVisible({ timeout: 1_500 });
+  await expect(transitionLayer).toHaveAttribute('data-transition-started-at', /\d+/u);
+  const transitionStartedAt = Number(await transitionLayer.getAttribute('data-transition-started-at'));
+  expect(transitionStartedAt - pendingAt, 'source logo first appears about 0.9 seconds after the final pixel is collected')
+    .toBeGreaterThanOrEqual(875);
+  expect(transitionStartedAt - pendingAt).toBeLessThanOrEqual(975);
+  await expect(transitionLayer).toHaveAttribute('data-transition-profile', 'level2-source');
+  await expect(page.locator('.transition-next-preview img'))
+    .toHaveAttribute('src', '/assets/transitions/level-3-opening.png');
+  const animationDurationMs = await page.locator('.transition-brand').evaluate((brand) => {
+    const duration = getComputedStyle(brand).animationDuration;
+    const value = Number.parseFloat(duration);
+    return duration.endsWith('ms') ? value : value * 1_000;
+  });
+  expect(animationDurationMs, 'Level 2 source logo grow/hold/shrink/reveal duration').toBe(1_200);
+  await page.waitForFunction(() => window.__levelTwoTransitionFrames?.some(({ elapsedMs }) => elapsedMs >= 1_150));
+  const transitionFrames = await page.evaluate(() => window.__levelTwoTransitionFrames);
+  const closestFrame = (targetMs) => transitionFrames.reduce((closest, sample) => (
+    Math.abs(sample.elapsedMs - targetMs) < Math.abs(closest.elapsedMs - targetMs) ? sample : closest
+  ));
+  const logoFrameComparisons = levelTwoTransitionSource.logoFrames.map((sourceFrame) => {
+    const actual = closestFrame(sourceFrame.elapsedMs);
+    return {
+      sourceFrame: sourceFrame.frame,
+      sourceTimeSeconds: sourceFrame.sourceTimeSeconds,
+      targetElapsedMs: sourceFrame.elapsedMs,
+      expectedScale: sourceFrame.scale,
+      expectedOpacity: sourceFrame.visible ? 1 : 0,
+      actual,
+      elapsedErrorMs: Math.abs(actual.elapsedMs - sourceFrame.elapsedMs),
+      scaleError: Math.abs(actual.logoScale - sourceFrame.scale),
+      opacityError: Math.abs(actual.logoOpacity - (sourceFrame.visible ? 1 : 0)),
+    };
+  });
+  const visibleLogoComparisons = logoFrameComparisons.filter(({ sourceFrame }) => sourceFrame < 576);
+  const worstLogoFrameComparison = visibleLogoComparisons.reduce((worst, current) => (
+    current.scaleError > worst.scaleError ? current : worst
+  ));
+  const maxFrameElapsedErrorMs = Math.max(...logoFrameComparisons.map(({ elapsedErrorMs }) => elapsedErrorMs));
+  const maxLogoScaleError = Math.max(...visibleLogoComparisons.map(({ scaleError }) => scaleError));
+  const maxLogoOpacityError = Math.max(...logoFrameComparisons.map(({ opacityError }) => opacityError));
+  const revealFrameComparisons = levelTwoTransitionSource.revealFrames
+    .filter(({ frame }) => frame <= 586)
+    .map((sourceFrame) => {
+      const actual = closestFrame(sourceFrame.elapsedMs);
+      return {
+        sourceFrame: sourceFrame.frame,
+        sourceTimeSeconds: sourceFrame.sourceTimeSeconds,
+        targetElapsedMs: sourceFrame.elapsedMs,
+        expectedRadiusPercent: sourceFrame.radiusPercent,
+        actual,
+        radiusErrorPercent: Math.abs(actual.revealRadiusPercent - sourceFrame.radiusPercent),
+      };
+    });
+  const maxRevealRadiusError = Math.max(...revealFrameComparisons.map(({ radiusErrorPercent }) => radiusErrorPercent));
+  const worstRevealFrameComparison = revealFrameComparisons.reduce((worst, current) => (
+    current.radiusErrorPercent > worst.radiusErrorPercent ? current : worst
+  ));
+  await writeFile(testInfo.outputPath('level2-transition-frame-probe.json'), `${JSON.stringify({
+    sourceReference: 'continuous decoded frames 0517-0586 at 60 fps, source time 18.100-19.250 s',
+    pendingAt,
+    transitionStartedAt,
+    settleDurationMs: transitionStartedAt - pendingAt,
+    animationDurationMs,
+    sampledFrames: transitionFrames.length,
+    sourceLogoFrames: levelTwoTransitionSource.logoFrames.length,
+    sourceRevealFrames: revealFrameComparisons.length,
+    maxFrameElapsedErrorMs,
+    maxLogoScaleError,
+    maxLogoOpacityError,
+    worstLogoFrame: {
+      sourceFrame: worstLogoFrameComparison.sourceFrame,
+      expectedScale: worstLogoFrameComparison.expectedScale,
+      actualScale: worstLogoFrameComparison.actual.logoScale,
+      scaleError: worstLogoFrameComparison.scaleError,
+    },
+    maxRevealRadiusError,
+    worstRevealFrame: {
+      sourceFrame: worstRevealFrameComparison.sourceFrame,
+      expectedRadiusPercent: worstRevealFrameComparison.expectedRadiusPercent,
+      actualRadiusPercent: worstRevealFrameComparison.actual.revealRadiusPercent,
+      radiusErrorPercent: worstRevealFrameComparison.radiusErrorPercent,
+    },
+    logoFrameComparisons,
+    revealFrameComparisons,
+    samples: transitionFrames,
+  }, null, 2)}\n`);
+  console.log(`Level 2 source frame comparison: ${JSON.stringify({
+    sampledFrames: transitionFrames.length,
+    maxFrameElapsedErrorMs,
+    maxLogoScaleError,
+    maxLogoOpacityError,
+    worstLogoFrame: {
+      sourceFrame: worstLogoFrameComparison.sourceFrame,
+      expectedScale: worstLogoFrameComparison.expectedScale,
+      actualScale: worstLogoFrameComparison.actual.logoScale,
+      scaleError: worstLogoFrameComparison.scaleError,
+    },
+    maxRevealRadiusError,
+    worstRevealFrame: {
+      sourceFrame: worstRevealFrameComparison.sourceFrame,
+      expectedRadiusPercent: worstRevealFrameComparison.expectedRadiusPercent,
+      actualRadiusPercent: worstRevealFrameComparison.actual.revealRadiusPercent,
+      radiusErrorPercent: worstRevealFrameComparison.radiusErrorPercent,
+    },
+    logo: logoFrameComparisons.filter(({ sourceFrame }) => [517, 520, 529, 550, 562, 565, 568, 571, 574, 576].includes(sourceFrame)),
+    reveal: revealFrameComparisons.filter(({ sourceFrame }) => [576, 578, 581, 582, 585, 586].includes(sourceFrame)),
+  })}`);
+  expect(transitionFrames.length, 'browser should capture the full source transition at display-frame cadence').toBeGreaterThanOrEqual(65);
+  expect(maxFrameElapsedErrorMs, 'browser samples should stay within one 60 fps source frame').toBeLessThanOrEqual(17);
+  expect(maxLogoScaleError, 'logo scale should follow each decoded source frame').toBeLessThanOrEqual(0.005);
+  expect(maxLogoOpacityError, 'logo visibility should match every decoded source frame').toBeLessThanOrEqual(0.01);
+  expect(maxRevealRadiusError, 'circular reveal should follow every measured source frame').toBeLessThanOrEqual(0.1);
   await expect(page.getByRole('status', { name: '正在进入第 3 关' })).toBeVisible();
-  await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
+  await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 1_500 });
+  const totalTransitionMs = await page.evaluate((startedAt) => performance.now() - startedAt, pendingAt);
+  expect(totalTransitionMs, 'Level 2 source settle plus logo/reveal timing').toBeGreaterThanOrEqual(2_000);
+  expect(totalTransitionMs).toBeLessThanOrEqual(2_250);
 });
 
 test('Level 3–5 的不同颜色槽能命中各自像素目标', async ({ page }) => {
