@@ -220,6 +220,7 @@ async function countPixelsInRegion(screenshot, region, matches) {
 async function startLevelOneYellowFrameProbe(page) {
   await page.evaluate(() => {
     const source = document.querySelector('#level-one-source-video');
+    const sourceAudio = document.querySelector('#level-one-source-audio');
     const game = document.querySelector('#game-canvas');
     const sourceCropCanvas = document.createElement('canvas');
     const gameCropCanvas = document.createElement('canvas');
@@ -292,6 +293,9 @@ async function startLevelOneYellowFrameProbe(page) {
         }
         result.samples.push({
           sourceTime,
+          audioTime: sourceAudio?.currentTime ?? null,
+          audioPaused: sourceAudio?.paused ?? true,
+          audioDriftMs: sourceAudio ? (sourceAudio.currentTime - sourceTime) * 1_000 : null,
           sourceFrame,
           sourceRows,
           gameRows,
@@ -473,16 +477,15 @@ test('点击设置按钮后可继续游戏', async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-test('Level 1 教程逐帧对齐原片，循环时黄色槽不动', async ({ page }, testInfo) => {
+test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', async ({ page }, testInfo) => {
   const tutorialVideo = page.locator('#level-one-tutorial-video');
   await expect.poll(() => tutorialVideo.evaluate((video) => (
     video.currentSrc.endsWith('/assets/level1/level1-tutorial-hand.mp4')
       && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-      && !video.paused
   ))).toBeTruthy();
   const duration = await tutorialVideo.evaluate((video) => video.duration);
   expect(duration, 'the tutorial clip must end before the source begins lifting the yellow tray').toBeLessThanOrEqual(26 / 60 + 0.002);
-  expect(duration, 'the tutorial loop must retain the full hand-only movement').toBeGreaterThan(25 / 60 - 0.002);
+  expect(duration, 'the one-shot tutorial must retain the full hand-only movement').toBeGreaterThan(25 / 60 - 0.002);
 
   const captureFrame = async (frameIndex, label) => {
     const sample = await page.evaluate(async (index) => {
@@ -554,13 +557,11 @@ test('Level 1 教程逐帧对齐原片，循环时黄色槽不动', async ({ pag
     return sample;
   };
 
-  // Frames 0, 15, and 25 span the original hand gesture. The final capture
-  // returns to frame 0 to exercise the loop seam without replaying tray motion.
+  // Frames 0, 15, and 25 span the original hand gesture.
   const frames = [
     await captureFrame(0, 'frame-00'),
     await captureFrame(15, 'frame-15'),
     await captureFrame(25, 'frame-25'),
-    await captureFrame(0, 'loop-frame-00'),
   ];
   const compareRegion = (before, after, label) => {
     const beforePixels = Buffer.from(before, 'base64');
@@ -584,6 +585,170 @@ test('Level 1 教程逐帧对齐原片，循环时黄色槽不动', async ({ pag
     const trayMotion = compareRegion(frames[0].yellow.actual, frame.yellow.actual, frames[0].yellow);
     expect(trayMotion, `yellow tray must remain pixel-stable at source frame ${[15, 25, 0][index]}`).toBe(0);
   }
+
+  await expect(tutorialVideo).toHaveJSProperty('loop', false);
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }));
+  await tutorialVideo.evaluate((video) => new Promise((resolve) => {
+    video.addEventListener('seeked', resolve, { once: true });
+    video.currentTime = 0;
+  }));
+  await tutorialVideo.evaluate((video) => video.play());
+  await expect.poll(() => tutorialVideo.evaluate((video) => video.ended && video.paused), { timeout: 1_500 }).toBeTruthy();
+  const endedTrayHashes = [];
+  for (let sample = 0; sample < 5; sample += 1) {
+    endedTrayHashes.push(await page.evaluate(() => {
+      const game = document.querySelector('#game-canvas');
+      const ratio = game.width / 597;
+      const pixels = game.getContext('2d').getImageData(
+        Math.round(157 * ratio), Math.round(738 * ratio),
+        Math.round(285 * ratio), Math.round(260 * ratio),
+      ).data;
+      let hash = 2_166_136_261;
+      for (const value of pixels) hash = Math.imul(hash ^ value, 16_777_619);
+      return hash >>> 0;
+    }));
+    await page.waitForTimeout(60);
+  }
+  expect(new Set(endedTrayHashes).size, 'the yellow tray should stop changing after the one-shot tutorial gesture ends')
+    .toBe(1);
+});
+
+test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', async ({ page }, testInfo) => {
+  const tutorialVideo = page.locator('#level-one-tutorial-video');
+  await expect.poll(() => tutorialVideo.evaluate((video) => (
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  ))).toBeTruthy();
+
+  const alignment = await page.evaluate(async () => {
+    const video = document.querySelector('#level-one-tutorial-video');
+    const game = document.querySelector('#game-canvas');
+    const gameContext = game.getContext('2d');
+    const ratio = game.width / 597;
+    const reference = document.createElement('canvas');
+    reference.width = game.width;
+    reference.height = game.height;
+    const referenceContext = reference.getContext('2d', { alpha: false });
+    const panel = document.createElement('canvas');
+    panel.width = 563;
+    panel.height = 756;
+    const panelContext = panel.getContext('2d');
+    panelContext.imageSmoothingEnabled = false;
+    const yellowSourceRect = { left: 157, top: 738, width: 285, height: 184 };
+    const yellowFullRect = { left: 157, top: 738, width: 285, height: 260 };
+    const handRect = { left: 277, top: 546, width: 190, height: 210 };
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    video.pause();
+
+    const read = (context, rect) => context.getImageData(
+      Math.round(rect.left * ratio), Math.round(rect.top * ratio),
+      Math.round(rect.width * ratio), Math.round(rect.height * ratio),
+    ).data;
+    const compare = (actual, expected, width, masks = []) => {
+      let exactDifferentPixels = 0;
+      let visibleDifferentPixels = 0;
+      let maximumChannelDifference = 0;
+      let left = width;
+      let top = actual.length / 4 / width;
+      let right = -1;
+      let bottom = -1;
+      for (let offset = 0; offset < actual.length; offset += 4) {
+        const pixel = offset / 4;
+        const x = pixel % width;
+        const y = Math.floor(pixel / width);
+        if (masks.some(({ left: maskLeft, top: maskTop, right: maskRight, bottom: maskBottom }) => (
+          x >= maskLeft && x < maskRight && y >= maskTop && y < maskBottom
+        ))) continue;
+        const red = Math.abs(actual[offset] - expected[offset]);
+        const green = Math.abs(actual[offset + 1] - expected[offset + 1]);
+        const blue = Math.abs(actual[offset + 2] - expected[offset + 2]);
+        const maximum = Math.max(red, green, blue);
+        if (maximum > 0) exactDifferentPixels += 1;
+        if (maximum > 8) {
+          visibleDifferentPixels += 1;
+          left = Math.min(left, x);
+          top = Math.min(top, y);
+          right = Math.max(right, x);
+          bottom = Math.max(bottom, y);
+        }
+        maximumChannelDifference = Math.max(maximumChannelDifference, maximum);
+      }
+      return {
+        exactDifferentPixels,
+        visibleDifferentPixels,
+        maximumChannelDifference,
+        visibleDifferenceBounds: right < 0 ? null : { left, top, right, bottom },
+      };
+    };
+
+    const frames = [];
+    let firstYellowFull;
+    let firstHand;
+    for (let frameIndex = 0; frameIndex < 26; frameIndex += 1) {
+      const targetTime = (frameIndex + 0.5) / 60;
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`Tutorial seek to frame ${frameIndex} timed out`)), 3_000);
+        video.addEventListener('seeked', () => {
+          clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+        video.currentTime = targetTime;
+      });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      panelContext.clearRect(0, 0, panel.width, panel.height);
+      panelContext.drawImage(video, 0, 0, panel.width, panel.height);
+      referenceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+      referenceContext.clearRect(0, 0, reference.width, reference.height);
+      referenceContext.drawImage(panel, 17, 226);
+      const actualYellowSource = read(gameContext, yellowSourceRect);
+      const expectedYellowSource = read(referenceContext, yellowSourceRect);
+      const actualYellowFull = read(gameContext, yellowFullRect);
+      const actualHand = read(gameContext, handRect);
+      const expectedHand = read(referenceContext, handRect);
+      const yellowFrameMatch = compare(actualYellowSource, expectedYellowSource, yellowSourceRect.width);
+      const handFrameMatch = compare(actualHand, expectedHand, handRect.width);
+      if (!firstYellowFull) firstYellowFull = actualYellowFull.slice();
+      if (!firstHand) firstHand = actualHand.slice();
+      const yellowStability = compare(actualYellowFull, firstYellowFull, yellowFullRect.width, [
+        { left: 165, top: 0, right: 285, bottom: 38 },
+      ]);
+      frames.push({
+        frameIndex,
+        sourceTime: video.currentTime,
+        yellowFrameMatch,
+        handFrameMatch,
+        yellowChangeFromFirstFrame: yellowStability,
+        handMotionFromFirstFrame: compare(actualHand, firstHand, handRect.width).exactDifferentPixels,
+      });
+    }
+    return { sourceRange: '00:02.300–00:02.717, 60 fps', frames };
+  });
+
+  expect(alignment.frames).toHaveLength(26);
+  expect(alignment.frames.every(({ yellowFrameMatch }) => yellowFrameMatch.visibleDifferentPixels === 0),
+    'each tutorial yellow-tray frame must visually match its same-time source frame').toBeTruthy();
+  expect(alignment.frames.every(({ handFrameMatch }) => handFrameMatch.visibleDifferentPixels === 0),
+    'each tutorial hand frame must visually match its same-time source frame').toBeTruthy();
+  expect(alignment.frames.every(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.visibleDifferentPixels === 0),
+    'the yellow slot geometry outside the source hand occlusion must remain visually stable across every tutorial frame').toBeTruthy();
+  expect(alignment.frames[15].handMotionFromFirstFrame, 'the source hand should move during the one-shot tutorial gesture')
+    .toBeGreaterThan(1_000);
+
+  const summary = {
+    sourceRange: alignment.sourceRange,
+    yellowOverlayMask: { left: 165, top: 0, right: 285, bottom: 38, reason: 'source hand crosses the yellow 0% badge during tutorial frames' },
+    frameCount: alignment.frames.length,
+    visibleHandMismatches: alignment.frames.filter(({ handFrameMatch }) => handFrameMatch.visibleDifferentPixels > 0).length,
+    visibleYellowMismatches: alignment.frames.filter(({ yellowFrameMatch }) => yellowFrameMatch.visibleDifferentPixels > 0).length,
+    yellowUnstableFrames: alignment.frames.filter(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.visibleDifferentPixels > 0).length,
+    yellowCompressionVarianceFrames: alignment.frames.filter(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.exactDifferentPixels > 0).length,
+    frames: alignment.frames,
+  };
+  await testInfo.attach('level1-tutorial-26-frame-alignment.json', {
+    body: Buffer.from(JSON.stringify(summary, null, 2)),
+    contentType: 'application/json',
+  });
+  console.log(`Level 1 tutorial alignment: ${summary.frameCount} frames, ${summary.visibleHandMismatches} visible hand mismatches, ${summary.visibleYellowMismatches} visible yellow mismatches, ${summary.yellowUnstableFrames} yellow instability frames`);
 });
 
 test('Level 1 黄色槽按真实指针节奏连续上移，扫墙从对应源帧接上', async ({ page }, testInfo) => {
@@ -989,8 +1154,22 @@ test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async 
   const maximumBucketColorError = Math.max(...activeBucketComparisons.map((capture) => capture.meanAbsoluteColorError));
   const averagePanelDiff = fullPanelComparisons.reduce((sum, capture) => sum + capture.differentPixelRatio, 0)
     / fullPanelComparisons.length;
+  const audioSyncSamples = frameProbe.samples.filter((sample) => (
+    sample.sourceTime >= 0.55 && sample.sourceTime <= 1.55 && !sample.audioPaused
+  ));
+  const audioDrifts = audioSyncSamples.map((sample) => Math.abs(sample.audioDriftMs)).sort((a, b) => a - b);
+  const audioSync = {
+    sampleCount: audioSyncSamples.length,
+    p95AbsoluteDriftMs: audioDrifts[Math.min(audioDrifts.length - 1, Math.floor(audioDrifts.length * 0.95))] ?? null,
+    maximumAbsoluteDriftMs: audioDrifts.at(-1) ?? null,
+  };
+  expect(audioSync.sampleCount, 'source audio should run throughout the yellow sweep').toBeGreaterThanOrEqual(45);
+  expect(audioSync.maximumAbsoluteDriftMs, 'source audio and video timelines should stay within 60 ms')
+    .toBeLessThanOrEqual(60);
+  frameAlignment.audioSync = audioSync;
   console.log(`Level 1 yellow source alignment: ${frameProbe.videoFrames.length} decoded frames / ${frameProbe.samples.length} rendered samples, mean center-cell mismatch ${averageCellMismatch.toFixed(1)}/323, board RGB error ${averageColorError.toFixed(2)} (max ${maximumColorError.toFixed(2)}), active bucket ${averageBucketColorError.toFixed(2)} (max ${maximumBucketColorError.toFixed(2)}), full panel pixel diff ${(averagePanelDiff * 100).toFixed(2)}%`);
   console.log(`Level 1 yellow progress source times: ${progressTimeLog.map(({ progress, sourceTime }) => `${progress}%=${sourceTime.toFixed(3)}s`).join(', ')}`);
+  console.log(`Level 1 source audio sync: ${audioSync.sampleCount} paired samples, p95 ${audioSync.p95AbsoluteDriftMs.toFixed(1)} ms, max ${audioSync.maximumAbsoluteDriftMs.toFixed(1)} ms`);
   await writeFile(testInfo.outputPath('level1-yellow-frame-alignment.json'), `${JSON.stringify(frameAlignment, null, 2)}\n`);
   await testInfo.attach('level1-yellow-frame-alignment.json', {
     body: Buffer.from(JSON.stringify(frameAlignment, null, 2)),

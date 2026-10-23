@@ -101,7 +101,11 @@ levelOneTutorialVideo.src = '/assets/level1/level1-tutorial-hand.mp4';
 levelOneTutorialVideo.preload = 'auto';
 levelOneTutorialVideo.playsInline = true;
 levelOneTutorialVideo.muted = true;
-levelOneTutorialVideo.loop = true;
+// The source recording shows one tutorial gesture before the player acts.
+// Replaying that 26-frame clip every 0.43s makes the hand pop back onto the
+// yellow progress badge and looks like the slot is flashing. Keep the final
+// hand frame on screen after the one-shot gesture instead.
+levelOneTutorialVideo.loop = false;
 levelOneTutorialVideo.disablePictureInPicture = true;
 levelOneTutorialVideo.setAttribute('aria-hidden', 'true');
 levelOneTutorialVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
@@ -1763,7 +1767,7 @@ function updateLevelOneTutorialPlayback() {
     && !document.hidden
     && !prefersReducedMotion.matches
     && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-  if (shouldPlay && levelOneTutorialVideo.paused) {
+  if (shouldPlay && levelOneTutorialVideo.paused && !levelOneTutorialVideo.ended) {
     void levelOneTutorialVideo.play().catch(() => {});
   } else if (!shouldPlay && !levelOneTutorialVideo.paused) {
     levelOneTutorialVideo.pause();
