@@ -122,11 +122,20 @@ levelOneSourceAudio.preload = 'auto';
 levelOneSourceAudio.setAttribute('aria-hidden', 'true');
 levelOneSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneSourceAudio);
-const levelOneSourcePanelCanvas = document.createElement('canvas');
-levelOneSourcePanelCanvas.width = 563;
-levelOneSourcePanelCanvas.height = 756;
-const levelOneSourcePanelContext = levelOneSourcePanelCanvas.getContext('2d');
 const LEVEL_ONE_OPENING_BLEND_START = 696;
+const levelOneSourceBlendCanvas = document.createElement('canvas');
+levelOneSourceBlendCanvas.width = 564;
+levelOneSourceBlendCanvas.height = 756 - LEVEL_ONE_OPENING_BLEND_START;
+const levelOneSourceBlendContext = levelOneSourceBlendCanvas.getContext('2d');
+const levelOneSourceFadeMask = document.createElement('canvas');
+levelOneSourceFadeMask.width = 564;
+levelOneSourceFadeMask.height = 756 - LEVEL_ONE_OPENING_BLEND_START;
+const levelOneSourceFadeMaskContext = levelOneSourceFadeMask.getContext('2d');
+const levelOneSourceFadeGradient = levelOneSourceFadeMaskContext.createLinearGradient(0, 0, 0, levelOneSourceFadeMask.height);
+levelOneSourceFadeGradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+levelOneSourceFadeGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+levelOneSourceFadeMaskContext.fillStyle = levelOneSourceFadeGradient;
+levelOneSourceFadeMaskContext.fillRect(0, 0, 564, levelOneSourceFadeMask.height);
 const levelOneYellowPileImage = new Image();
 levelOneYellowPileImage.src = '/assets/level1/level1-yellow-pile-100.png';
 const levelTwoBoardImage = new Image();
@@ -1623,10 +1632,16 @@ const LEVEL_ONE_SOURCE_SEGMENTS = {
 const LEVEL_ONE_SOURCE_DRAG_LEADS_MS = { yellow: 500, green: 500, red: 0 };
 
 const LEVEL_ONE_PROGRESS_STOPS = {
-  yellow: [[0.06, 1_000], [0.36, 1_250], [0.63, 1_500], [0.99, 1_750], [1, 2_000]],
+  yellow: [[0.06, 1_000], [0.36, 1_200], [0.63, 1_400], [0.99, 1_700], [1, 2_000]],
   green: [[0.25, 750], [0.48, 900], [0.71, 1_050], [0.85, 1_200], [0.99, 1_350], [1, 1_500]],
   red: [[0.03, 0], [0.06, 200], [0.69, 233], [0.72, 250], [0.77, 283], [0.82, 333], [0.86, 367], [0.92, 383], [0.96, 450], [1, 550]],
 };
+
+// Yellow rows clear from top to bottom in the source recording. These times
+// are relative to its 00:02.3 opening frame, where the source animation starts.
+const LEVEL_ONE_YELLOW_ROW_LAUNCH_MS = [
+  567, 600, 650, 683, 717, 767, 783, 850, 900, 983, 1_033, 1_033, 1_050, 1_317, 1_417, 1_467, 1_517,
+];
 
 function levelOneSourceSegment(color) {
   return LEVEL_ONE_SOURCE_SEGMENTS[color] ?? null;
@@ -1767,14 +1782,18 @@ function levelOneSweepSchedule(cell, bucket, rank, total) {
   const positionInBatch = Math.max(0, count - previousCount - 1);
   const launchWindowStartMs = Math.max(previousArrivalMs, arrivalMs - 180);
   const launchWindowMs = Math.max(0, arrivalMs - launchWindowStartMs);
-  const launchMs = Math.round(launchWindowStartMs + (positionInBatch / Math.max(1, batchCount - 1)) * launchWindowMs);
+  const launchMs = state.game.level === 1 && bucket.color === 'yellow'
+    ? LEVEL_ONE_YELLOW_ROW_LAUNCH_MS[cell.row] ?? 567
+    : Math.round(launchWindowStartMs + (positionInBatch / Math.max(1, batchCount - 1)) * launchWindowMs);
   return { launchMs, arrivalMs };
 }
 
 function startLevelOneSweep(bucket, now) {
   const targets = state.game.grid.flatMap((cell, index) => (
     cell?.targetBucketId === bucket.id ? [{ cell, index }] : []
-  )).sort((a, b) => b.cell.row - a.cell.row || a.cell.column - b.cell.column);
+  )).sort((a, b) => (bucket.color === 'yellow'
+    ? a.cell.row - b.cell.row || a.cell.column - b.cell.column
+    : b.cell.row - a.cell.row || a.cell.column - b.cell.column));
   const entries = targets.map(({ cell, index }, rank) => ({
     cell,
     index,
@@ -2026,22 +2045,51 @@ function colorName(color) {
   })[color] ?? '';
 }
 
-function drawLevelOneSourcePanel(source) {
-  const fadeStart = LEVEL_ONE_OPENING_BLEND_START;
-  const fadeRows = levelOneSourcePanelCanvas.height - fadeStart;
-  levelOneSourcePanelContext.clearRect(0, 0, 563, 756);
-  levelOneSourcePanelContext.imageSmoothingEnabled = false;
-  levelOneSourcePanelContext.drawImage(source, 0, 0, 563, 756);
-  const bottom = levelOneSourcePanelContext.getImageData(0, fadeStart, 563, fadeRows);
-  for (let y = 0; y < fadeRows; y += 1) {
-    const alpha = Math.round((1 - y / (fadeRows - 1)) * 255);
-    for (let x = 0; x < 563; x += 1) {
-      const alphaOffset = (y * 563 + x) * 4 + 3;
-      bottom.data[alphaOffset] = Math.round((bottom.data[alphaOffset] * alpha) / 255);
-    }
+function drawLevelOneFadedPanel(source, sourceWidth, height, destinationWidth = sourceWidth) {
+  const bottomHeight = height - LEVEL_ONE_OPENING_BLEND_START;
+  if (levelOneSourceBlendCanvas.width !== destinationWidth || levelOneSourceBlendCanvas.height !== bottomHeight) {
+    levelOneSourceBlendCanvas.width = destinationWidth;
+    levelOneSourceBlendCanvas.height = bottomHeight;
   }
-  levelOneSourcePanelContext.putImageData(bottom, 0, fadeStart);
-  ctx.drawImage(levelOneSourcePanelCanvas, 17, 226);
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(source, 0, 0, sourceWidth, LEVEL_ONE_OPENING_BLEND_START,
+    17, 226, destinationWidth, LEVEL_ONE_OPENING_BLEND_START);
+  levelOneSourceBlendContext.imageSmoothingEnabled = false;
+  levelOneSourceBlendContext.globalCompositeOperation = 'source-over';
+  levelOneSourceBlendContext.drawImage(source, 0, LEVEL_ONE_OPENING_BLEND_START, sourceWidth, bottomHeight,
+    0, 0, destinationWidth, bottomHeight);
+  levelOneSourceBlendContext.globalCompositeOperation = 'destination-in';
+  levelOneSourceBlendContext.drawImage(levelOneSourceFadeMask, 0, 0, destinationWidth, bottomHeight);
+  levelOneSourceBlendContext.globalCompositeOperation = 'source-over';
+  ctx.drawImage(levelOneSourceBlendCanvas, 17, 226 + LEVEL_ONE_OPENING_BLEND_START);
+  ctx.restore();
+}
+
+function drawLevelOneSourcePanel(source) {
+  const sourceWidth = source.videoWidth || source.naturalWidth || 563;
+  const sourceHeight = source.videoHeight || source.naturalHeight || 756;
+  drawLevelOneFadedPanel(source, sourceWidth, sourceHeight, 563);
+}
+
+function drawLevelOneSourceActionPanel() {
+  if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const width = levelOneSourceVideo.videoWidth || 564;
+  const height = levelOneSourceVideo.videoHeight || 756;
+  drawLevelOneFadedPanel(levelOneSourceVideo, width, height, width);
+}
+
+function drawLevelOneSourceBoardFrame() {
+  if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const board = state.game.gridRect;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(levelOneSourceVideo, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
+  ctx.restore();
 }
 
 function drawLevelOneBucketsUnderSourcePanel() {
@@ -2190,14 +2238,18 @@ function drawScene(now) {
   if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {
-    // The source recording contains several consecutive touches. Replaying its
-    // full panel during one browser drag also replays later bucket movements,
-    // while hit testing still uses this game's bucket coordinates. Keep the
-    // reference audio timeline, but render positions and particles from state.
-    drawPixelWall();
-    drawPad();
-    drawBuckets();
-    drawParticles(now);
+    // The yellow source interval contains only its own sweep. Later intervals
+    // include neighboring slot motion, so those keep live slot rendering.
+    if (state.levelOneSourceTimeline.color === 'yellow') {
+      drawLevelOneBucketsUnderSourcePanel();
+      drawLevelOneSourceActionPanel();
+    } else {
+      drawPixelWall();
+      drawPad();
+      drawBuckets();
+      drawParticles(now);
+      drawLevelOneSourceBoardFrame();
+    }
   } else if (showSourceOpeningPanel) {
     const tutorialPanelSource = !prefersReducedMotion.matches
       && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA

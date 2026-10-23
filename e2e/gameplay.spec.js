@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 import { createGameState } from '../src/game.js';
 
+const levelOneOpeningBlendStart = 696;
 const levelOneBoardPixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-board.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -20,11 +22,6 @@ const levelOneOpeningPanelPixels = await sharp(fileURLToPath(new URL('../assets/
 const levelOnePadPixels = await Promise.all(Array.from({ length: 4 }, (_, index) => sharp(
   fileURLToPath(new URL(`../assets/level1/level1-pad-cell-${index + 1}.png`, import.meta.url)),
 ).ensureAlpha().raw().toBuffer({ resolveWithObject: true })));
-const levelOneYellowPilePixels = await sharp(fileURLToPath(new URL('../assets/level1/level1-yellow-pile-100.png', import.meta.url)))
-  .extract({ left: 20, top: 20, width: 173, height: 170 })
-  .ensureAlpha()
-  .raw()
-  .toBuffer({ resolveWithObject: true });
 const levelTwoBoardPixels = await sharp(fileURLToPath(new URL('../assets/level2/level2-board.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -220,6 +217,143 @@ async function countPixelsInRegion(screenshot, region, matches) {
   return count;
 }
 
+async function startLevelOneYellowFrameProbe(page) {
+  await page.evaluate(() => {
+    const source = document.querySelector('#level-one-source-video');
+    const game = document.querySelector('#game-canvas');
+    const sourceCropCanvas = document.createElement('canvas');
+    const gameCropCanvas = document.createElement('canvas');
+    for (const canvas of [sourceCropCanvas, gameCropCanvas]) {
+      canvas.width = 474;
+      canvas.height = 219;
+    }
+    const sourceBucketCanvas = document.createElement('canvas');
+    const gameBucketCanvas = document.createElement('canvas');
+    for (const canvas of [sourceBucketCanvas, gameBucketCanvas]) {
+      canvas.width = 260;
+      canvas.height = 341;
+    }
+    const sourcePanelCanvas = document.createElement('canvas');
+    const gamePanelCanvas = document.createElement('canvas');
+    for (const canvas of [sourcePanelCanvas, gamePanelCanvas]) {
+      canvas.width = 564;
+      canvas.height = 756;
+    }
+    const sourceCropContext = sourceCropCanvas.getContext('2d', { willReadFrequently: true });
+    const gameCropContext = gameCropCanvas.getContext('2d', { willReadFrequently: true });
+    const sourceBucketContext = sourceBucketCanvas.getContext('2d', { willReadFrequently: true });
+    const gameBucketContext = gameBucketCanvas.getContext('2d', { willReadFrequently: true });
+    const sourcePanelContext = sourcePanelCanvas.getContext('2d', { willReadFrequently: true });
+    const gamePanelContext = gamePanelCanvas.getContext('2d', { willReadFrequently: true });
+    const targets = [0.5, 0.7, 1.0, 1.25, 1.5, 1.6];
+    const result = { recording: false, videoFrames: [], samples: [], captures: [], timedOut: false, done: false };
+    window.__levelOneYellowFrameProbe = result;
+    let captureIndex = 0;
+    const isYellow = (data, offset) => (
+      data[offset] > 150
+      && data[offset + 1] > 150
+      && data[offset + 2] < 150
+      && data[offset] > data[offset + 2] * 1.3
+      && data[offset + 1] > data[offset + 2] * 1.2
+    );
+    const countRows = (pixels) => {
+      const rows = [];
+      for (let row = 0; row < 17; row += 1) {
+        let yellow = 0;
+        for (let column = 9; column <= 27; column += 1) {
+          const x = Math.round((column + 0.5) * 474 / 37);
+          const y = Math.round((row + 0.5) * 219 / 17);
+          const offset = (y * 474 + x) * 4;
+          if (isYellow(pixels.data, offset)) yellow += 1;
+        }
+        rows.push(yellow);
+      }
+      return rows;
+    };
+    const captureFrame = (sourceTime, finalFrame) => {
+      const sourceFrame = Math.round(sourceTime * 60);
+      if (sourceTime >= 0.48 && sourceTime <= 1.7) {
+        sourceCropContext.drawImage(source, 44, 43, 474, 219, 0, 0, 474, 219);
+        gameCropContext.drawImage(game, 61, 269, 474, 219, 0, 0, 474, 219);
+        sourceBucketContext.drawImage(source, 150, 198, 260, 341, 0, 0, 260, 341);
+        gameBucketContext.drawImage(game, 167, 424, 260, 341, 0, 0, 260, 341);
+        const sourcePixels = sourceCropContext.getImageData(0, 0, 474, 219);
+        const gamePixels = gameCropContext.getImageData(0, 0, 474, 219);
+        const sourceRows = countRows(sourcePixels);
+        const gameRows = countRows(gamePixels);
+        let mismatchedCells = 0;
+        for (let row = 0; row < 17; row += 1) {
+          for (let column = 9; column <= 27; column += 1) {
+            const x = Math.round((column + 0.5) * 474 / 37);
+            const y = Math.round((row + 0.5) * 219 / 17);
+            const offset = (y * 474 + x) * 4;
+            if (isYellow(sourcePixels.data, offset) !== isYellow(gamePixels.data, offset)) mismatchedCells += 1;
+          }
+        }
+        result.samples.push({
+          sourceTime,
+          sourceFrame,
+          sourceRows,
+          gameRows,
+          mismatchedCells,
+        });
+        const target = targets[captureIndex];
+        if (target !== undefined && sourceTime >= target) {
+          sourcePanelContext.drawImage(source, 0, 0, 564, 756, 0, 0, 564, 756);
+          gamePanelContext.drawImage(game, 17, 226, 564, 756, 0, 0, 564, 756);
+          result.captures.push({
+            target,
+            sourceTime,
+            source: sourceCropCanvas.toDataURL('image/png'),
+            game: gameCropCanvas.toDataURL('image/png'),
+            sourceBucket: sourceBucketCanvas.toDataURL('image/png'),
+            gameBucket: gameBucketCanvas.toDataURL('image/png'),
+            sourcePanel: sourcePanelCanvas.toDataURL('image/png'),
+            gamePanel: gamePanelCanvas.toDataURL('image/png'),
+            sourceRows,
+            gameRows,
+          });
+          captureIndex += 1;
+        }
+      }
+      if (finalFrame || sourceTime >= 1.65) result.done = true;
+    };
+    const sampleVideoFrame = (_now, metadata) => {
+      const sourceTime = metadata.mediaTime;
+      if (result.recording && sourceTime >= 0.48 && sourceTime <= 1.65) {
+        result.videoFrames.push({
+          sourceTime,
+          sourceFrame: Math.round(sourceTime * 60),
+          presentedFrames: metadata.presentedFrames,
+        });
+      }
+      if (result.recording && sourceTime >= 0.48) {
+        // Let the game's own animation-frame draw consume this decoded video
+        // frame before reading its canvas, so paired crops compare the same
+        // presented source frame rather than racing the render loop.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => captureFrame(source.currentTime, sourceTime >= 1.65));
+        });
+      }
+      if (sourceTime >= 1.65) {
+        return;
+      }
+      source.requestVideoFrameCallback(sampleVideoFrame);
+    };
+    source.requestVideoFrameCallback(sampleVideoFrame);
+    game.addEventListener('pointerup', () => {
+      setTimeout(() => {
+        result.recording = true;
+        setTimeout(() => {
+          if (!result.done) {
+            result.timedOut = true;
+            result.done = true;
+          }
+        }, 5_000);
+      }, 0);
+    }, { once: true });
+  });
+}
 async function completeLevelOne(page, assertTransition = false) {
   for (const [x, color] of [[298, '黄色'], [111, '绿色'], [485, '红色']]) {
     await drag(page, x, 866, x, 620);
@@ -573,25 +707,226 @@ test('Level 1 倒计时文字在胶囊框内横向和纵向居中', async ({ pag
 });
 
 test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async ({ page }, testInfo) => {
+  await startLevelOneYellowFrameProbe(page);
   await page.evaluate(() => {
     const status = document.querySelector('#live-status');
     window.__levelOneProgressLog = [];
-    const record = () => window.__levelOneProgressLog.push(status?.textContent ?? '');
+    window.__levelOneProgressTimeLog = [];
+    const record = () => {
+      const text = status?.textContent ?? '';
+      window.__levelOneProgressLog.push(text);
+      const progress = Number(text.match(/进度 (\d+)%/)?.[1]);
+      if (Number.isFinite(progress)) {
+        window.__levelOneProgressTimeLog.push({
+          progress,
+          sourceTime: document.querySelector('#level-one-source-video')?.currentTime ?? null,
+        });
+      }
+    };
     record();
     new MutationObserver(record).observe(status, { childList: true, characterData: true, subtree: true });
   });
   await drag(page, 298, 866, 298, 620);
 
   await expect(page.locator('#live-status')).toContainText('进度 6%', { timeout: 1_500 });
-  await page.screenshot({ path: testInfo.outputPath('level1-yellow-sweep-6.png') });
 
   for (const progress of [36, 63, 99, 100]) {
     await expect(page.locator('#live-status')).toContainText(`进度 ${progress}%`, { timeout: 1_000 });
   }
   const progressLog = await page.evaluate(() => window.__levelOneProgressLog);
+  const progressTimeLog = await page.evaluate(() => window.__levelOneProgressTimeLog);
   for (const progress of [36, 63, 99, 100]) {
     expect(progressLog.some((entry) => entry.includes(`进度 ${progress}%`)), `missing observed ${progress}% transition`).toBeTruthy();
   }
+  for (const [progress, expectedSourceTime] of [[6, 1.0], [36, 1.2], [63, 1.4], [99, 1.7], [100, 2.0]]) {
+    const observed = progressTimeLog.find((entry) => entry.progress === progress);
+    expect(observed, `missing source-time record for ${progress}%`).toBeTruthy();
+    expect(Math.abs(observed.sourceTime - expectedSourceTime), `${progress}% source time ${observed.sourceTime.toFixed(3)}s`)
+      .toBeLessThanOrEqual(0.035);
+  }
+
+  const frameProbe = await page.evaluate(async () => {
+    while (!window.__levelOneYellowFrameProbe.done) await new Promise((resolve) => setTimeout(resolve, 20));
+    return window.__levelOneYellowFrameProbe;
+  });
+  expect(frameProbe.timedOut, 'source-synced frame probe should reach the end of the yellow clear').toBeFalsy();
+  expect(frameProbe.videoFrames.length, 'observe more than 55 decoded source frames during the sweep').toBeGreaterThanOrEqual(55);
+  expect(frameProbe.samples.length, 'compare rendered canvas frames against the source wall').toBeGreaterThanOrEqual(55);
+  expect(frameProbe.captures.map(({ target }) => target)).toEqual([0.5, 0.7, 1.0, 1.25, 1.5, 1.6]);
+
+  for (const [target, clearedRows] of [[0.7, 4], [1.0, 10], [1.6, 17]]) {
+    const capture = frameProbe.captures.find((entry) => entry.target === target);
+    expect(capture.sourceRows.slice(0, clearedRows).every((count) => count === 0), `source top ${clearedRows} rows should be clear at ${target}s`)
+      .toBeTruthy();
+    expect(capture.gameRows.slice(0, clearedRows).every((count) => count === 0), `replica top ${clearedRows} rows should be clear at ${target}s`)
+      .toBeTruthy();
+  }
+
+  const averageCellMismatch = frameProbe.samples.reduce((sum, frame) => sum + frame.mismatchedCells, 0)
+    / frameProbe.samples.length;
+  const captureComparisons = [];
+  for (const capture of frameProbe.captures) {
+    const source = await sharp(Buffer.from(capture.source.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const game = await sharp(Buffer.from(capture.game.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const diffPixels = pixelmatch(source.data, game.data, Buffer.alloc(game.data.length), 474, 219, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    let absoluteColorDifference = 0;
+    for (let offset = 0; offset < source.data.length; offset += 4) {
+      absoluteColorDifference += Math.abs(source.data[offset] - game.data[offset]);
+      absoluteColorDifference += Math.abs(source.data[offset + 1] - game.data[offset + 1]);
+      absoluteColorDifference += Math.abs(source.data[offset + 2] - game.data[offset + 2]);
+    }
+    const comparison = {
+      target: capture.target,
+      sourceTime: capture.sourceTime,
+      differentPixelRatio: diffPixels / (474 * 219),
+      meanAbsoluteColorError: absoluteColorDifference / (474 * 219 * 3),
+      sourceRows: capture.sourceRows,
+      gameRows: capture.gameRows,
+    };
+    captureComparisons.push(comparison);
+    await sharp(Buffer.from(capture.source.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-source-${capture.target.toFixed(2)}.png`));
+    await sharp(Buffer.from(capture.game.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-replica-${capture.target.toFixed(2)}.png`));
+  }
+  for (const comparison of captureComparisons) {
+    expect(comparison.differentPixelRatio, `board crop at ${comparison.sourceTime.toFixed(3)}s must match the presented source frame`)
+      .toBe(0);
+  }
+  const averageColorError = captureComparisons.reduce((sum, capture) => sum + capture.meanAbsoluteColorError, 0)
+    / captureComparisons.length;
+  const maximumColorError = Math.max(...captureComparisons.map((capture) => capture.meanAbsoluteColorError));
+  const activeBucketComparisons = [];
+  for (const capture of frameProbe.captures) {
+    const source = await sharp(Buffer.from(capture.sourceBucket.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const game = await sharp(Buffer.from(capture.gameBucket.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const diffPixels = pixelmatch(source.data, game.data, Buffer.alloc(game.data.length), 260, 341, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    let absoluteColorDifference = 0;
+    for (let offset = 0; offset < source.data.length; offset += 4) {
+      absoluteColorDifference += Math.abs(source.data[offset] - game.data[offset]);
+      absoluteColorDifference += Math.abs(source.data[offset + 1] - game.data[offset + 1]);
+      absoluteColorDifference += Math.abs(source.data[offset + 2] - game.data[offset + 2]);
+    }
+    activeBucketComparisons.push({
+      target: capture.target,
+      sourceTime: capture.sourceTime,
+      differentPixelRatio: diffPixels / (260 * 341),
+      meanAbsoluteColorError: absoluteColorDifference / (260 * 341 * 3),
+    });
+    await sharp(Buffer.from(capture.sourceBucket.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-source-bucket-${capture.target.toFixed(2)}.png`));
+    await sharp(Buffer.from(capture.gameBucket.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-replica-bucket-${capture.target.toFixed(2)}.png`));
+  }
+  for (const comparison of activeBucketComparisons) {
+    expect(comparison.differentPixelRatio, `active yellow area at ${comparison.sourceTime.toFixed(3)}s must match the presented source frame`)
+      .toBe(0);
+  }
+  const fullPanelComparisons = [];
+  for (const capture of frameProbe.captures) {
+    const source = await sharp(Buffer.from(capture.sourcePanel.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const game = await sharp(Buffer.from(capture.gamePanel.split(',')[1], 'base64'))
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const diffPixels = pixelmatch(source.data, game.data, Buffer.alloc(game.data.length), 564, 756, {
+      threshold: 0.12,
+      includeAA: false,
+    });
+    const topBytes = 564 * levelOneOpeningBlendStart * 4;
+    const topDiffPixels = pixelmatch(
+      source.data.subarray(0, topBytes),
+      game.data.subarray(0, topBytes),
+      Buffer.alloc(topBytes),
+      564,
+      levelOneOpeningBlendStart,
+      { threshold: 0.12, includeAA: false },
+    );
+    const bottomHeight = 756 - levelOneOpeningBlendStart;
+    const bottomDiffPixels = pixelmatch(
+      source.data.subarray(topBytes),
+      game.data.subarray(topBytes),
+      Buffer.alloc(game.data.length - topBytes),
+      564,
+      bottomHeight,
+      { threshold: 0.12, includeAA: false },
+    );
+    let absoluteColorDifference = 0;
+    for (let offset = 0; offset < source.data.length; offset += 4) {
+      absoluteColorDifference += Math.abs(source.data[offset] - game.data[offset]);
+      absoluteColorDifference += Math.abs(source.data[offset + 1] - game.data[offset + 1]);
+      absoluteColorDifference += Math.abs(source.data[offset + 2] - game.data[offset + 2]);
+    }
+    fullPanelComparisons.push({
+      target: capture.target,
+      sourceTime: capture.sourceTime,
+      differentPixelRatio: diffPixels / (564 * 756),
+      topDifferentPixelRatio: topDiffPixels / (564 * levelOneOpeningBlendStart),
+      bottomDifferentPixelRatio: bottomDiffPixels / (564 * bottomHeight),
+      meanAbsoluteColorError: absoluteColorDifference / (564 * 756 * 3),
+    });
+    await sharp(Buffer.from(capture.sourcePanel.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-source-panel-${capture.target.toFixed(2)}.png`));
+    await sharp(Buffer.from(capture.gamePanel.split(',')[1], 'base64'))
+      .png()
+      .toFile(testInfo.outputPath(`yellow-replica-panel-${capture.target.toFixed(2)}.png`));
+  }
+  for (const comparison of fullPanelComparisons) {
+    expect(comparison.topDifferentPixelRatio, `action panel above the blended bottom at ${comparison.sourceTime.toFixed(3)}s`)
+      .toBe(0);
+  }
+  const frameAlignment = {
+    sourceClip: 'RPReplay_Final1792661235.MP4 at 00:02.3 + sourceTime',
+    sampleRate: 'requestVideoFrameCallback at source 60 fps; rendered canvas sampled on the following animation frame',
+    videoFrames: frameProbe.videoFrames,
+    sampleCount: frameProbe.samples.length,
+    progressTimeLog,
+    averageCellMismatch,
+    averageColorError,
+    maximumColorError,
+    samples: frameProbe.samples,
+    captures: captureComparisons,
+    activeBucketComparisons,
+    fullPanelComparisons,
+  };
+  const averageBucketColorError = activeBucketComparisons.reduce((sum, capture) => sum + capture.meanAbsoluteColorError, 0)
+    / activeBucketComparisons.length;
+  const maximumBucketColorError = Math.max(...activeBucketComparisons.map((capture) => capture.meanAbsoluteColorError));
+  const averagePanelDiff = fullPanelComparisons.reduce((sum, capture) => sum + capture.differentPixelRatio, 0)
+    / fullPanelComparisons.length;
+  console.log(`Level 1 yellow source alignment: ${frameProbe.videoFrames.length} decoded frames / ${frameProbe.samples.length} rendered samples, mean center-cell mismatch ${averageCellMismatch.toFixed(1)}/323, board RGB error ${averageColorError.toFixed(2)} (max ${maximumColorError.toFixed(2)}), active bucket ${averageBucketColorError.toFixed(2)} (max ${maximumBucketColorError.toFixed(2)}), full panel pixel diff ${(averagePanelDiff * 100).toFixed(2)}%`);
+  console.log(`Level 1 yellow progress source times: ${progressTimeLog.map(({ progress, sourceTime }) => `${progress}%=${sourceTime.toFixed(3)}s`).join(', ')}`);
+  await writeFile(testInfo.outputPath('level1-yellow-frame-alignment.json'), `${JSON.stringify(frameAlignment, null, 2)}\n`);
+  await testInfo.attach('level1-yellow-frame-alignment.json', {
+    body: Buffer.from(JSON.stringify(frameAlignment, null, 2)),
+    contentType: 'application/json',
+  });
 });
 
 test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async ({ page }, testInfo) => {
@@ -658,7 +993,7 @@ test('Level 1 设置页暂停并从同一进度继续原画与原声', async ({ 
   await expect.poll(() => page.locator('audio').evaluate((audio) => !audio.paused)).toBeTruthy();
 });
 
-test('Level 1 黄色槽满格正确绘制像素堆叠且帧循环保持运行', async ({ page }) => {
+test('Level 1 黄色槽满格停在原作终帧且帧循环保持运行', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   const start = await pointOnCanvas(page, 298, 866);
@@ -673,17 +1008,28 @@ test('Level 1 黄色槽满格正确绘制像素堆叠且帧循环保持运行', 
   await page.mouse.up();
   await expect(page.locator('#live-status')).toContainText('进度 100%');
 
-  const screenshot = await page.screenshot();
-  const actual = await sharp(screenshot)
-    .extract({ left: 212, top: 539, width: 173, height: 170 })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const diff = pixelmatch(levelOneYellowPilePixels.data, actual.data, Buffer.alloc(actual.data.length), actual.info.width, actual.info.height, {
-    threshold: 0.16,
-    includeAA: false,
+  const actionFrame = await page.evaluate(() => {
+    const source = document.querySelector('#level-one-source-video');
+    const game = document.querySelector('#game-canvas');
+    const reference = document.createElement('canvas');
+    reference.width = 564;
+    reference.height = 696;
+    const referenceContext = reference.getContext('2d', { willReadFrequently: true });
+    referenceContext.drawImage(source, 0, 0, 564, 696, 0, 0, 564, 696);
+    const referencePixels = referenceContext.getImageData(0, 0, 564, 696).data;
+    const gamePixels = game.getContext('2d', { willReadFrequently: true })
+      .getImageData(17, 226, 564, 696).data;
+    let differentPixels = 0;
+    for (let offset = 0; offset < referencePixels.length; offset += 4) {
+      if (referencePixels[offset] !== gamePixels[offset]
+        || referencePixels[offset + 1] !== gamePixels[offset + 1]
+        || referencePixels[offset + 2] !== gamePixels[offset + 2]) differentPixels += 1;
+    }
+    return { sourceTime: source.currentTime, differentPixels };
   });
-  expect(diff / (actual.info.width * actual.info.height), `Level 1 full bucket texture differs at ${diff} pixels`).toBeLessThan(0.005);
+  expect(Math.abs(actionFrame.sourceTime - 2), `yellow sweep should stop at its 2.0s source endpoint, got ${actionFrame.sourceTime.toFixed(3)}s`)
+    .toBeLessThanOrEqual(0.05);
+  expect(actionFrame.differentPixels, 'the final 696px of the yellow action panel should match its paused source frame').toBe(0);
   expect(pageErrors, 'rendering a full yellow slot must not stop the animation loop').toEqual([]);
   await drag(page, 111, 866, 111, 620);
   await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 100%', { timeout: 5_000 });
