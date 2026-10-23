@@ -242,6 +242,59 @@ async function findRgbBounds(screenshot, region, matches) {
   return count ? { left, top, right, bottom, count } : null;
 }
 
+async function findRgbComponentBounds(screenshot, region, matches, includeComponent = () => true) {
+  const { data, info } = await sharp(screenshot)
+    .extract(region)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const seen = new Uint8Array(info.width * info.height);
+  const components = [];
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const start = y * info.width + x;
+      const offset = start * info.channels;
+      if (seen[start] || !matches(data[offset], data[offset + 1], data[offset + 2])) continue;
+      seen[start] = 1;
+      const stack = [start];
+      const bounds = {
+        left: x + region.left,
+        top: y + region.top,
+        right: x + region.left,
+        bottom: y + region.top,
+        count: 0,
+      };
+      while (stack.length) {
+        const index = stack.pop();
+        const componentY = Math.floor(index / info.width);
+        const componentX = index % info.width;
+        bounds.left = Math.min(bounds.left, componentX + region.left);
+        bounds.top = Math.min(bounds.top, componentY + region.top);
+        bounds.right = Math.max(bounds.right, componentX + region.left);
+        bounds.bottom = Math.max(bounds.bottom, componentY + region.top);
+        bounds.count += 1;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nextX = componentX + dx;
+            const nextY = componentY + dy;
+            if (nextX < 0 || nextY < 0 || nextX >= info.width || nextY >= info.height) continue;
+            const nextIndex = nextY * info.width + nextX;
+            if (seen[nextIndex]) continue;
+            const nextOffset = nextIndex * info.channels;
+            if (!matches(data[nextOffset], data[nextOffset + 1], data[nextOffset + 2])) continue;
+            seen[nextIndex] = 1;
+            stack.push(nextIndex);
+          }
+        }
+      }
+      components.push(bounds);
+    }
+  }
+  return components
+    .filter((component) => component.count > 30 && includeComponent(component))
+    .sort((left, right) => right.count - left.count)[0] ?? null;
+}
+
 async function startLevelOneYellowFrameProbe(page) {
   await page.evaluate(() => {
     const source = document.querySelector('#level-one-source-video');
@@ -1767,22 +1820,22 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
   // localized text by colored row bounds, since the source lettering is English.
   const rows = {
     green: {
-      actual: await findRgbBounds(fullBrand, { left: 100, top: 520, width: 400, height: 90 },
+      actual: await findRgbBounds(fullBrand, { left: 100, top: 520, width: 300, height: 100 },
         (r, g, b) => g > 100 && g > r * 1.25 && g > b * 1.12),
-      target: { left: 203, right: 430, top: 533, bottom: 609 },
-      tolerance: { centerX: 8, centerY: 8, width: 15, height: 15 },
+      target: { left: 203, right: 399, top: 533, bottom: 606 },
+      tolerance: { centerX: 4, centerY: 4, width: 4, height: 8 },
     },
     red: {
       actual: await findRgbBounds(fullBrand, { left: 100, top: 590, width: 400, height: 90 },
         (r, g, b) => r > 120 && r > g * 1.25 && r > b * 1.2),
       target: { left: 200, right: 411, top: 594, bottom: 679 },
-      tolerance: { centerX: 8, centerY: 8, width: 15, height: 15 },
+      tolerance: { centerX: 3, centerY: 3, width: 4, height: 4 },
     },
     gold: {
       actual: await findRgbBounds(fullBrand, { left: 100, top: 650, width: 400, height: 120 },
         (r, g, b) => r > 145 && g > 70 && r > g * 1.08 && g > b * 1.15),
       target: { left: 176, right: 395, top: 658, bottom: 750 },
-      tolerance: { centerX: 16, centerY: 10, width: 25, height: 20 },
+      tolerance: { centerX: 3, centerY: 3, width: 4, height: 4 },
     },
   };
   for (const [name, row] of Object.entries(rows)) {
@@ -1800,15 +1853,85 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
     expect(Math.abs(actualWidth - targetWidth), `${name} row width should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.width);
     expect(Math.abs(actualHeight - targetHeight), `${name} row height should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.height);
   }
+  const sourceVoxels = {
+    purple: {
+      actual: await findRgbBounds(fullBrand, { left: 160, top: 500, width: 90, height: 90 },
+        (r, g, b) => r > 100 && b > 110 && r > g * 1.2 && b > g * 1.2),
+      target: { left: 183, right: 229, top: 520, bottom: 574 },
+    },
+    green: {
+      actual: await findRgbComponentBounds(
+        fullBrand,
+        { left: 350, top: 500, width: 130, height: 180 },
+        (r, g, b) => g > 75 && g > r * 1.12 && g > b * 1.08,
+        (component) => component.left > 400,
+      ),
+      target: { left: 402, right: 450, top: 607, bottom: 661 },
+    },
+    blue: {
+      actual: await findRgbBounds(fullBrand, { left: 160, top: 645, width: 55, height: 60 },
+        (r, g, b) => r < 120 && g > 170 && b > 210),
+      target: { left: 166, right: 197, top: 653, bottom: 686 },
+    },
+  };
+  for (const [name, voxel] of Object.entries(sourceVoxels)) {
+    expect(voxel.actual, `${name} source voxel should remain visible`).not.toBeNull();
+    const actualCenterX = (voxel.actual.left + voxel.actual.right) / 2;
+    const actualCenterY = (voxel.actual.top + voxel.actual.bottom) / 2;
+    const targetCenterX = (voxel.target.left + voxel.target.right) / 2;
+    const targetCenterY = (voxel.target.top + voxel.target.bottom) / 2;
+    expect(Math.abs(actualCenterX - targetCenterX), `${name} voxel horizontal center should follow source frame 013`).toBeLessThanOrEqual(3);
+    expect(Math.abs(actualCenterY - targetCenterY), `${name} voxel vertical center should follow source frame 013`).toBeLessThanOrEqual(3);
+    expect(Math.abs((voxel.actual.right - voxel.actual.left) - (voxel.target.right - voxel.target.left)), `${name} voxel width should follow source frame 013`).toBeLessThanOrEqual(5);
+    expect(Math.abs((voxel.actual.bottom - voxel.actual.top) - (voxel.target.bottom - voxel.target.top)), `${name} voxel height should follow source frame 013`).toBeLessThanOrEqual(5);
+  }
   await writeFile(testInfo.outputPath('level1-brand-frame-alignment.json'), `${JSON.stringify({
     reference: 'source frame 013 at 8.002 s, original 597x1296 recording',
     localizedTextBounds: Object.fromEntries(Object.entries(rows).map(([name, row]) => [name, {
       actual: row.actual,
       source: row.target,
     }])),
+    floatingVoxelBounds: Object.fromEntries(Object.entries(sourceVoxels).map(([name, voxel]) => [name, {
+      actual: voxel.actual,
+      source: voxel.target,
+    }])),
   }, null, 2)}\n`);
   await expect(page.getByRole('status', { name: '正在进入第 2 关' })).toBeVisible();
   await expect(page.locator('.transition-logo')).toContainText('大闯关');
+  const cssBrandRows = await page.locator('.transition-logo span').evaluateAll((spans) => spans.map((span) => {
+    const { x, y, width, height } = span.getBoundingClientRect();
+    return { text: span.textContent, x, y, width, height };
+  }));
+  console.log(`Level 1 localized DOM logo rows: ${JSON.stringify(cssBrandRows)}`);
+  const cssRowTargets = [
+    { centerX: 301, centerY: 565, width: 197, height: 60 },
+    { centerX: 305.5, centerY: 630, width: 212, height: 60 },
+    { centerX: 285.5, centerY: 704, width: 220, height: 72 },
+  ];
+  for (const [index, row] of cssBrandRows.entries()) {
+    const target = cssRowTargets[index];
+    expect(Math.abs(row.x + row.width / 2 - target.centerX), `DOM logo row ${index + 1} horizontal center should follow source frame 013`).toBeLessThanOrEqual(3);
+    expect(Math.abs(row.y + row.height / 2 - target.centerY), `DOM logo row ${index + 1} vertical center should follow source frame 013`).toBeLessThanOrEqual(3);
+    expect(Math.abs(row.width - target.width), `DOM logo row ${index + 1} width should follow source frame 013`).toBeLessThanOrEqual(4);
+    expect(Math.abs(row.height - target.height), `DOM logo row ${index + 1} height should follow source frame 013`).toBeLessThanOrEqual(3);
+  }
+  const cssBrandVoxels = await page.locator('.transition-cube').evaluateAll((voxels) => voxels.map((voxel) => {
+    const { x, y, width, height } = voxel.getBoundingClientRect();
+    return { className: voxel.className, x, y, width, height };
+  }));
+  console.log(`Level 1 localized DOM logo voxels: ${JSON.stringify(cssBrandVoxels)}`);
+  const cssVoxelTargets = {
+    'transition-cube cube-purple': { centerX: 206, centerY: 547, width: 47, height: 55 },
+    'transition-cube cube-green': { centerX: 426, centerY: 634, width: 49, height: 55 },
+  };
+  for (const [className, target] of Object.entries(cssVoxelTargets)) {
+    const voxel = cssBrandVoxels.find(({ className: actualClass }) => actualClass === className);
+    expect(voxel, `${className} should appear in the transition`).toBeTruthy();
+    expect(Math.abs(voxel.x + voxel.width / 2 - target.centerX), `${className} horizontal center should follow source frame 013`).toBeLessThanOrEqual(2);
+    expect(Math.abs(voxel.y + voxel.height / 2 - target.centerY), `${className} vertical center should follow source frame 013`).toBeLessThanOrEqual(2);
+    expect(Math.abs(voxel.width - target.width), `${className} width should follow source frame 013`).toBeLessThanOrEqual(2);
+    expect(Math.abs(voxel.height - target.height), `${className} height should follow source frame 013`).toBeLessThanOrEqual(2);
+  }
   const transitionStartedAt = Number(await page.locator('.transition-overlay').getAttribute('data-transition-started-at'));
   await page.waitForFunction(() => window.__pbjTransitionFrames?.some(({ elapsedMs }) => elapsedMs >= 560));
   const transitionFrames = await page.evaluate(() => window.__pbjTransitionFrames);
@@ -1824,6 +1947,9 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
     sourceReference: '7.802–8.802 s source frames 001–061 at 60 fps',
     transitionStartedAt,
     sampledFrames: transitionFrames.length,
+    cssBrandRows,
+    cssBrandVoxels,
+    cssVoxelTargets,
     sourceFrameMarkers,
     samples: transitionFrames,
   }, null, 2)}\n`);

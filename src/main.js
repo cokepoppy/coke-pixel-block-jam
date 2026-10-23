@@ -2127,8 +2127,9 @@ function drawLevelOneBrandBackground() {
   ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
 }
 
-function drawLevelOneBrandLine(text, y, size, colors, horizontalScale = 1.62) {
+function drawLevelOneBrandLine(text, y, size, colors, horizontalScale = 1.62, horizontalOffset = 0, extrusionDepth = 8) {
   ctx.save();
+  ctx.translate(horizontalOffset, 0);
   ctx.translate(0, y);
   ctx.scale(horizontalScale, 1);
   ctx.translate(0, -y);
@@ -2136,7 +2137,7 @@ function drawLevelOneBrandLine(text, y, size, colors, horizontalScale = 1.62) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
-  for (let depth = 8; depth > 0; depth -= 1) {
+  for (let depth = extrusionDepth; depth > 0; depth -= 1) {
     ctx.lineWidth = 10;
     ctx.strokeStyle = colors.deep;
     ctx.strokeText(text, 0, y + depth);
@@ -2197,18 +2198,29 @@ function drawLevelOneLocalizedBrandMark(sourceTime) {
   ctx.strokeStyle = '#6a7f94';
   ctx.stroke();
 
-  drawLevelOneBrandLine('像素', -80, 62, {
+  ctx.save();
+  ctx.translate(-91.5, -115);
+  ctx.scale(0.88, 1);
+  loadingVoxel(0, 0, 55, 'purple', -0.18, true, {
+    light: '#f276ff', mid: '#d51de8', dark: '#8310bb', deep: '#470b7d',
+  });
+  ctx.restore();
+
+  drawLevelOneBrandLine('像素', -82, 66, {
     light: '#a4ff53', face: '#76e92d', shadow: '#4cac20', outline: '#326b1d', deep: '#1e5018',
-  });
-  drawLevelOneBrandLine('方块', -22, 62, {
+  }, 1.523, 7.5, 13);
+  ctx.save();
+  ctx.translate(130, -29);
+  ctx.scale(0.91, 1);
+  loadingVoxel(0, 0, 50, 'green', 0.13);
+  ctx.restore();
+  drawLevelOneBrandLine('方块', -23, 63, {
     light: '#ff8376', face: '#f34b40', shadow: '#cb2e27', outline: '#a32621', deep: '#712019',
-  });
-  drawLevelOneBrandLine('大闯关', 52, 72, {
+  }, 1.655, 7);
+  drawLevelOneBrandLine('大闯关', 51, 84, {
     light: '#fff7d2', face: '#ffe8a4', shadow: '#f5bd42', outline: '#bd521b', deep: '#87300e',
-  }, 1.1);
-  loadingVoxel(-98, -104, 43, 'purple', -0.18);
-  loadingVoxel(109, -47, 42, 'green', 0.13);
-  loadingVoxel(-115, 29, 41, 'blue', -0.1);
+  }, 0.867, -13);
+  loadingVoxel(-115, 11, 35, 'blue', -0.1);
   ctx.restore();
 }
 

@@ -581,24 +581,36 @@ body {
 }
 
 .cube-purple {
-  top: calc(50% - 104px);
-  left: calc(50% - 98px);
+  top: calc(50% - 101px);
+  left: calc(50% - 92px);
+  z-index: 2;
+  width: 37px;
+  height: 46px;
+  aspect-ratio: auto;
   transform: translate(-50%, -50%) rotate(-16deg);
   background: linear-gradient(145deg, #ef6bff, #9b27d8 65%, #6415a1);
   --cube-rotation: -16deg;
 }
 
 .cube-blue {
-  top: calc(50% + 29px);
-  left: calc(50% - 115px);
+  top: calc(50% + 26px);
+  left: calc(50% - 112px);
+  z-index: 4;
+  width: 42px;
+  height: 49px;
+  aspect-ratio: auto;
   transform: translate(-50%, -50%) rotate(-10deg);
   background: linear-gradient(145deg, #55eaff, #117fd8 65%, #09529e);
   --cube-rotation: -10deg;
 }
 
 .cube-green {
-  top: calc(50% - 47px);
-  left: calc(50% + 109px);
+  top: calc(50% - 14px);
+  left: calc(50% + 128px);
+  z-index: 3;
+  width: 41px;
+  height: 48px;
+  aspect-ratio: auto;
   transform: translate(-50%, -50%) rotate(12deg);
   background: linear-gradient(145deg, #b3ff43, #37bb22 65%, #17801c);
   --cube-rotation: 12deg;
@@ -607,25 +619,28 @@ body {
 .transition-logo span {
   display: block;
   -webkit-text-stroke: 1px #ffffff52;
-  transform: scaleX(1.18);
 }
 
 .transition-logo span:nth-child(1) {
   color: #7bee35;
   text-shadow: 0 3px 0 #37821a, 0 6px 0 #1d531c, 0 8px 3px #04182bbb;
+  transform: translate(.42vw, -2.85vw) scaleX(1.28);
 }
 
 .transition-logo span:nth-child(2) {
   color: #ff5049;
   text-shadow: 0 3px 0 #ad3027, 0 6px 0 #72231d, 0 8px 3px #04182bbb;
+  transform: translate(1.17vw, -2vw) scaleX(1.38);
 }
 
 .transition-logo span:nth-child(3) {
   color: #fff0c9;
   -webkit-text-stroke: 2px #b85017;
-  font-size: .86em;
+  font-size: .95em;
+  line-height: .9;
   letter-spacing: -.12em;
   text-shadow: 0 3px 0 #ef9a1d, 0 6px 0 #a94614, 0 8px 3px #04182bbb;
+  transform: translate(-2.18vw, -.67vw) scaleX(1.05);
 }
 
 /* Hold the completed badge, shrink it, then open the next board from its centre. */
