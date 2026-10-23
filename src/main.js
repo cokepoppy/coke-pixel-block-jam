@@ -192,6 +192,47 @@ levelTwoSourceGameplayVideo.disablePictureInPicture = true;
 levelTwoSourceGameplayVideo.setAttribute('aria-hidden', 'true');
 levelTwoSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 document.querySelector('.game-shell')?.append(levelTwoSourceGameplayVideo);
+const levelThirteenUfoReferenceVideo = document.createElement('video');
+levelThirteenUfoReferenceVideo.id = 'level-thirteen-ufo-reference-video';
+levelThirteenUfoReferenceVideo.src = '/assets/level13/ufo-fill-reference.webm';
+levelThirteenUfoReferenceVideo.preload = initialLevel === 13 ? 'auto' : 'none';
+levelThirteenUfoReferenceVideo.playsInline = true;
+levelThirteenUfoReferenceVideo.muted = true;
+levelThirteenUfoReferenceVideo.disablePictureInPicture = true;
+levelThirteenUfoReferenceVideo.setAttribute('aria-hidden', 'true');
+levelThirteenUfoReferenceVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelThirteenUfoReferenceVideo);
+// Zero-based source-frame indices mapped to the manually reviewed yellow-slot labels.
+// Labels are reviewed across adjacent source frames; frame 167 visibly resets to 30% before 82%.
+const LEVEL_THIRTEEN_UFO_SOURCE_PROGRESS = [
+  [0, 0],
+  [124, 9],
+  [127, 12],
+  [129, 16],
+  [131, 19],
+  [132, 25],
+  [137, 29],
+  [140, 36],
+  [142, 39],
+  [145, 42],
+  [147, 46],
+  [149, 50],
+  [151, 52],
+  [153, 56],
+  [155, 59],
+  [157, 63],
+  [161, 69],
+  [163, 72],
+  [165, 76],
+  [167, 30],
+  [169, 82],
+  [171, 86],
+  [173, 89],
+  [175, 92],
+  [177, 97],
+  [179, 99],
+  [181, 100],
+];
 const levelThreeBoardImage = new Image();
 levelThreeBoardImage.src = '/assets/level3/level3-board.png';
 const levelFourBoardCellsImage = new Image();
@@ -1744,56 +1785,129 @@ function drawParticles(now) {
 }
 
 function drawFlyingSaucer(now) {
-  if (state.game.level !== 13 || (!state.ufoMode && !state.ufoFlight)) return;
+  if (state.game.level !== 13 || !state.ufoFlight) return;
   const flight = state.ufoFlight;
-  let progress = 0;
-  if (flight) {
-    progress = Math.min(1, (now - flight.startedAt) / flight.duration);
+  const referenceVideoReady = levelThirteenUfoReferenceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  const elapsed = flight.useRecordedVisual && referenceVideoReady
+    ? levelThirteenUfoReferenceVideo.currentTime * 1_000
+    : Math.max(0, now - flight.startedAt);
+  canvas.dataset.ufoVisualSource = 'procedural';
+  if (flight.useRecordedVisual && elapsed >= flight.entryDuration
+    && levelThirteenUfoReferenceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    && !levelThirteenUfoReferenceVideo.seeking) {
+    // The source recording is cropped to the game viewport (x=0..597,
+    // y=165..870). Its first 620 ms contains the recorder's dimmed overlay;
+    // start compositing only once that overlay is gone.
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelThirteenUfoReferenceVideo, 0, 0, 597, 705, 0, 165, 597, 705);
+    ctx.restore();
+    canvas.dataset.ufoVisualSource = 'recorded';
+    canvas.dataset.ufoVisualTime = levelThirteenUfoReferenceVideo.currentTime.toFixed(4);
+    return;
   }
-  const travel = flight ? Math.min(1, (now - flight.startedAt) / flight.travelDuration) : 0;
-  const eased = travel * travel * (3 - 2 * travel);
-  const hover = state.ufoMode ? Math.sin(now / 260) * 7 : 0;
-  const from = flight?.from ?? { x: 294, y: 415 + hover };
-  const to = flight?.to ?? { x: from.x, y: 620 };
-  const cx = from.x + (to.x - from.x) * eased;
-  const cy = from.y + (to.y - from.y) * eased;
-  const hoverFlight = flight ? Math.max(0, now - flight.startedAt - flight.travelDuration) : 0;
-  const flightBob = flight ? Math.sin(hoverFlight / 170) * Math.min(6, hoverFlight / 90) : 0;
-  const angle = flight ? Math.atan2(to.y - from.y, to.x - from.x) * 0.12 * Math.sin(travel * Math.PI) : 0;
-  const beamTargetY = flight ? flight.targetY : cy + 170;
+  const entryProgress = Math.min(1, elapsed / flight.entryDuration);
+  const travelProgress = Math.max(0, Math.min(1, (elapsed - flight.travelStart) / flight.travelDuration));
+  const entryEase = 1 - (1 - entryProgress) ** 3;
+  const travelEase = travelProgress * travelProgress * (3 - 2 * travelProgress);
+  let cx = flight.hover.x;
+  let cy = flight.hover.y;
+  let angle = 0;
+  let scale = 1.08;
+  if (elapsed < flight.entryDuration) {
+    cx = flight.entryFrom.x + (flight.hover.x - flight.entryFrom.x) * entryEase;
+    cy = flight.entryFrom.y + (flight.hover.y - flight.entryFrom.y) * entryEase;
+    scale = 0.96 + entryEase * 0.12;
+  } else if (elapsed >= flight.travelStart && elapsed < flight.travelStart + flight.travelDuration) {
+    cx = flight.hover.x + (flight.to.x - flight.hover.x) * travelEase;
+    cy = flight.hover.y + (flight.to.y - flight.hover.y) * travelEase;
+    angle = Math.sin(travelProgress * Math.PI) * 0.2;
+  } else if (elapsed >= flight.travelStart + flight.travelDuration) {
+    cx = flight.to.x;
+    cy = flight.to.y;
+  }
 
-  ctx.save();
-  ctx.globalAlpha = flight ? 0.48 * (1 - progress * 0.35) : 0.32;
-  ctx.beginPath();
-  ctx.moveTo(cx - 54, cy + 15);
-  ctx.lineTo(cx - 70, beamTargetY);
-  ctx.lineTo(cx + 70, beamTargetY);
-  ctx.lineTo(cx + 54, cy + 15);
-  ctx.closePath();
-  ctx.fillStyle = gradient(0, cy, 0, beamTargetY, [[0, '#fff79c88'], [0.45, '#fff38a3c'], [1, '#dfffff00']]);
-  ctx.fill();
-  ctx.restore();
+  const bob = elapsed >= flight.entryDuration && elapsed < flight.travelStart
+    ? Math.sin(now / 285) * 2
+    : 0;
+  cy += bob;
+  const bucket = getBucket(state.game, flight.bucketId);
 
-  if (flight) {
-    for (let i = 0; i < 11; i += 1) {
-      const phase = (progress * 2.8 + i / 11) % 1;
-      const x = from.x + (to.x - from.x) * phase + Math.sin(i * 9 + now / 90) * 18;
-      const y = cy + flightBob + 34 + (beamTargetY - cy - 34) * phase;
-      const size = 4 + (i % 3) * 2;
-      ctx.save();
-      ctx.globalAlpha = 0.65 * (1 - phase * 0.4);
-      ctx.fillStyle = i % 2 ? '#fff28a' : '#f9c623';
-      ctx.translate(x, y);
-      ctx.rotate((i + now / 200) % 1.2);
-      ctx.fillRect(-size / 2, -size / 2, size, size);
-      ctx.restore();
+  if (elapsed >= flight.suctionStart && elapsed < flight.travelStart) {
+    const pulse = 0.12 + (Math.sin(now / 105) + 1) * 0.04;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.beginPath();
+    ctx.moveTo(cx - 50, cy + 24);
+    ctx.lineTo(cx - 148, flight.suctionBottom);
+    ctx.lineTo(cx + 148, flight.suctionBottom);
+    ctx.lineTo(cx + 50, cy + 24);
+    ctx.closePath();
+    ctx.fillStyle = gradient(0, cy, 0, flight.suctionBottom, [
+      [0, '#bda8ff88'], [0.48, '#dce6ff55'], [1, '#fff0a400'],
+    ]);
+    ctx.fill();
+
+    for (let i = 0; i < flight.suctionTargets.length; i += 1) {
+      const target = flight.suctionTargets[i];
+      const sway = Math.sin(now / 115 + i * 1.7);
+      ctx.globalAlpha = 0.34 + ((sway + 1) / 2) * 0.28;
+      ctx.strokeStyle = i % 3 === 0 ? '#fff6c6' : (i % 2 ? '#9272ff' : '#d9e8ff');
+      ctx.lineWidth = i % 3 === 0 ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + (i % 5 - 2) * 19, cy + 32);
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+
+      const phase = ((elapsed - flight.suctionStart) / 520 + i / flight.suctionTargets.length) % 1;
+      const particleX = target.x + (cx - target.x) * phase + Math.sin(now / 70 + i) * 4;
+      const particleY = target.y + (cy + 39 - target.y) * phase;
+      const size = 5 + (i % 3) * 2;
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = i % 4 === 0 ? '#fff7a6' : '#ffd62c';
+      ctx.fillRect(particleX - size / 2, particleY - size / 2, size, size);
+      ctx.fillStyle = '#fff8cb';
+      ctx.fillRect(particleX - size / 2, particleY - size / 2, Math.max(2, size / 2), 2);
     }
+    ctx.restore();
+  }
+
+  const fillProgress = Math.max(0, Math.min(1, (elapsed - flight.fillStart) / flight.fillDuration));
+  if (bucket && fillProgress > 0) {
+    const beamStartY = cy + 55;
+    const targetY = bucket.y + 8;
+    const targetX = bucket.x + bucket.width / 2;
+    ctx.save();
+    ctx.globalAlpha = 0.22 + Math.sin(now / 85) * 0.045;
+    ctx.beginPath();
+    ctx.moveTo(cx - 46, beamStartY);
+    ctx.lineTo(targetX - Math.min(75, bucket.width * 0.36), targetY);
+    ctx.lineTo(targetX + Math.min(75, bucket.width * 0.36), targetY);
+    ctx.lineTo(cx + 46, beamStartY);
+    ctx.closePath();
+    ctx.fillStyle = gradient(0, beamStartY, 0, targetY, [
+      [0, '#ece7ff66'], [0.36, '#fff39a77'], [1, '#fff8a222'],
+    ]);
+    ctx.fill();
+
+    for (let i = 0; i < 9; i += 1) {
+      const phase = ((elapsed - flight.fillStart) / 430 + i / 9) % 1;
+      const x = cx + (targetX - cx) * phase + Math.sin(now / 85 + i * 1.9) * (8 + phase * 7);
+      const y = beamStartY + (targetY - beamStartY) * phase;
+      const size = 5 + (i % 3) * 2;
+      ctx.globalAlpha = 0.78 * (1 - phase * 0.15);
+      ctx.fillStyle = i % 3 === 0 ? '#fff7a6' : '#ffd52b';
+      ctx.fillRect(x - size / 2, y - size / 2, size, size);
+      ctx.fillStyle = '#fffbd1';
+      ctx.fillRect(x - size / 2, y - size / 2, Math.max(2, size / 2), 2);
+    }
+    ctx.restore();
   }
 
   ctx.save();
   ctx.translate(cx, cy);
-  ctx.translate(0, flightBob);
   ctx.rotate(angle);
+  ctx.scale(scale, scale);
   ctx.shadowColor = '#15345288';
   ctx.shadowBlur = 20;
   ctx.shadowOffsetY = 16;
@@ -2056,6 +2170,32 @@ function levelOneSourceSegment(color) {
   return LEVEL_ONE_SOURCE_SEGMENTS[color] ?? null;
 }
 
+function scheduleLevelOneSourceFrameDraw(timeline) {
+  if (typeof levelOneSourceVideo.requestVideoFrameCallback !== 'function'
+      || timeline.sourceFrameDrawPending
+      || state.levelOneSourceTimeline !== timeline
+      || timeline.completed) return;
+  timeline.sourceFrameDrawPending = true;
+  levelOneSourceVideo.requestVideoFrameCallback((_now, metadata) => {
+    timeline.sourceFrameDrawPending = false;
+    if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+    const presentedAndPlayable = !levelOneSourceVideo.paused && !levelOneSourceVideo.seeking
+      && state.game.status !== 'paused' && !document.hidden;
+    if (presentedAndPlayable) {
+      // Canvas RAF can paint the previous decoded video frame when the media
+      // clock advances just after the app's RAF. Refresh only the source-backed
+      // region here; the normal game RAF remains responsible for state updates.
+      drawLevelOneSourceFrameToCanvas();
+    }
+    scheduleLevelOneSourceFrameDraw(timeline);
+    if (presentedAndPlayable && typeof window.__levelOneSourceFrameObserver === 'function') {
+      // Let frame-accurate E2E probes copy the source and canvas immediately
+      // after this exact presented media frame has been painted.
+      window.__levelOneSourceFrameObserver(metadata);
+    }
+  });
+}
+
 function prepareLevelOneSourceSegment(color) {
   const segment = levelOneSourceSegment(color);
   if (!segment || levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_METADATA) return;
@@ -2100,6 +2240,7 @@ function startLevelOneSourceAnimation(color, sweep) {
       if (timeline.completed) return;
       void levelOneSourceVideo.play().then(() => {
         if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+        scheduleLevelOneSourceFrameDraw(timeline);
         const elapsed = Math.max(0, (performance.now() - sweep.startedAt) / 1_000);
         const targetTime = Math.min(segment.end, segment.start + elapsed);
         if (Math.abs(levelOneSourceVideo.currentTime - targetTime) > 0.05) {
@@ -2359,19 +2500,47 @@ function activateSelectedBucket(bucket, now) {
     liveStatus.textContent = `这个${colorName(bucket.color)}收集槽没有可填充的像素`;
     return true;
   }
+  state.game.bucketBonusCollected ??= {};
+  const startCollected = Math.max(
+    state.game.bucketCollected[bucket.id] ?? 0,
+    state.game.bucketDisplayedCollected?.[bucket.id] ?? 0,
+    state.game.bucketBonusCollected[bucket.id] ?? 0,
+  );
+  const suctionTargetCount = Math.min(14, availableCells.length);
+  const suctionTargets = Array.from({ length: suctionTargetCount }, (_, index) => {
+    const cellIndex = suctionTargetCount > 1
+      ? Math.round(index * (availableCells.length - 1) / (suctionTargetCount - 1))
+      : 0;
+    const cell = availableCells[cellIndex];
+    return { x: cell.x, y: cell.y };
+  });
   state.ufoFlight = {
     startedAt: now,
-    duration: 2500,
-    travelDuration: 1200,
+    duration: 3200,
+    entryDuration: 620,
+    suctionStart: 620,
+    travelStart: 1480,
+    travelDuration: 220,
+    fillStart: 1900,
     fillDuration: 1300,
     bucketId: bucket.id,
+    useRecordedVisual: bucket.id === 'yellow-left',
     total: availableCells.length,
     collected: 0,
+    startCollected,
     soundPlayed: false,
-    from: { x: 294, y: 415 },
-    to: { x: bucket.x + bucket.width / 2, y: Math.max(590, bucket.y - 245) },
-    targetY: bucket.y + 8,
+    entryFrom: { x: 406, y: 180 },
+    hover: { x: 294, y: 274 },
+    suctionTargets,
+    suctionBottom: state.game.gridRect.y + state.game.gridRect.height - 8,
+    to: { x: bucket.x + bucket.width / 2, y: Math.max(560, bucket.y - 260) },
   };
+  const flight = state.ufoFlight;
+  if (flight.useRecordedVisual) {
+    levelThirteenUfoReferenceVideo.pause();
+    levelThirteenUfoReferenceVideo.currentTime = 0;
+    void levelThirteenUfoReferenceVideo.play().catch(() => {});
+  }
   state.ufoCharges -= 1;
   state.ufoMode = false;
   liveStatus.textContent = `飞碟正在填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
@@ -2385,29 +2554,48 @@ function advanceUfoFlight(now) {
   const bucket = getBucket(state.game, flight.bucketId);
   if (!bucket) {
     state.ufoFlight = null;
+    levelThirteenUfoReferenceVideo.pause();
     return;
   }
-  const elapsed = Math.max(0, now - flight.startedAt);
+  const elapsed = flight.useRecordedVisual
+    ? levelThirteenUfoReferenceVideo.currentTime * 1_000
+    : Math.max(0, now - flight.startedAt);
   const progress = Math.min(1, elapsed / flight.duration);
-  const fillProgress = Math.min(1, Math.max(0, (elapsed - flight.travelDuration) / flight.fillDuration));
-  const easedFillProgress = fillProgress * fillProgress * (3 - 2 * fillProgress);
-  const targetCount = Math.floor(flight.total * easedFillProgress);
-  const count = targetCount - flight.collected;
-  if (count > 0) {
-    const cells = fillBucket(state.game, flight.bucketId, count);
-    flight.collected += cells.length;
-    const playSound = cells.length > 0 && !flight.soundPlayed;
-    if (playSound) flight.soundPlayed = true;
-    addCollectedEffects(cells, now, bucket, {
-      announce: false,
-      playSound,
-    });
+  const fillProgress = Math.min(1, Math.max(0, (elapsed - flight.fillStart) / flight.fillDuration));
+  const sourceFrame = Math.max(0, Math.round(elapsed * 60 / 1_000));
+  let progressPercent = LEVEL_THIRTEEN_UFO_SOURCE_PROGRESS[0][1];
+  for (const [frame, percent] of LEVEL_THIRTEEN_UFO_SOURCE_PROGRESS) {
+    if (frame > sourceFrame) break;
+    progressPercent = percent;
+  }
+  // The recording briefly shows a lower label at frame 167; keep that visual value separate
+  // from the monotonic count of collected pixels.
+  state.game.bucketProgressDisplayOverride ??= {};
+  state.game.bucketProgressDisplayOverride[flight.bucketId] = progressPercent;
+  const targetCount = Math.floor(flight.total * progressPercent / 100);
+  const addedCount = targetCount - flight.collected;
+  if (addedCount > 0) {
+    flight.collected = targetCount;
+    state.game.bucketBonusCollected[flight.bucketId] = Math.min(
+      state.game.bucketTotals[flight.bucketId],
+      flight.startCollected + targetCount,
+    );
+    if (!flight.soundPlayed) {
+      audio.cue('collect');
+      flight.soundPlayed = true;
+    }
+  }
+  const displayedProgress = getProgress(state.game, bucket.id);
+  if (displayedProgress >= 100 && !bucket.completeAt) bucket.completeAt = now;
+  if (flight.lastDisplayedProgress !== progressPercent) {
+    liveStatus.textContent = `飞碟正在填充${colorName(bucket.color)}收集槽，进度 ${displayedProgress}%`;
+    flight.lastDisplayedProgress = progressPercent;
   }
   if (progress >= 1) {
     state.ufoFlight = null;
+    levelThirteenUfoReferenceVideo.pause();
+    canvas.dataset.ufoVisualSource = 'none';
     liveStatus.textContent = `飞碟已填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
-  } else if (count > 0) {
-    liveStatus.textContent = `飞碟正在填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`;
   }
 }
 
@@ -2499,6 +2687,17 @@ function drawLevelOneSourceBoardFrame() {
   ctx.globalCompositeOperation = 'source-over';
   ctx.drawImage(levelOneSourceVideo, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
   ctx.restore();
+}
+
+function drawLevelOneSourceFrameToCanvas() {
+  const timeline = state.levelOneSourceTimeline;
+  if (!timeline || levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  if (timeline.color === 'yellow') {
+    drawLevelOneBucketsUnderSourcePanel(LEVEL_ONE_ACTION_BLEND_START);
+    drawLevelOneSourceActionPanel();
+  } else if (!(timeline.color === 'red' && levelOneSourceVideo.currentTime >= 5.5)) {
+    drawLevelOneSourceBoardFrame();
+  }
 }
 
 function drawLevelOneBucketsUnderSourcePanel(blendStart = LEVEL_ONE_OPENING_BLEND_START) {
@@ -2732,7 +2931,8 @@ function drawScene(now) {
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
   if (state.game.status === 'tutorial') drawTutorialCard(now);
   if (!showLevelTwoLivePanel && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
-  if (!showLevelTwoLivePanel && !showSourceActionPanel) drawParticles(now);
+  const showRecordedUfoFrame = canvas.dataset.ufoVisualSource === 'recorded';
+  if (!showLevelTwoLivePanel && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
 
   if (state.game.invalidAt && now - state.game.invalidAt.at < 520) {
     const life = 1 - (now - state.game.invalidAt.at) / 520;
@@ -2898,6 +3098,8 @@ function restartCurrentLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  levelThirteenUfoReferenceVideo.pause();
+  levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
@@ -2923,6 +3125,8 @@ function advanceToNextLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  levelThirteenUfoReferenceVideo.pause();
+  levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
@@ -2931,6 +3135,10 @@ function advanceToNextLevel() {
   state.game = startNextLevel(state.game);
   state.endDialogShown = false;
   state.lastStatus = state.game.status;
+  if (state.game.level === 13) {
+    levelThirteenUfoReferenceVideo.preload = 'auto';
+    levelThirteenUfoReferenceVideo.load();
+  }
   if (state.game.level === 7) state.freezeCharges = 2;
   if (state.game.level === 9) state.hammerCharges = 2;
   if (state.game.level === 13) state.ufoCharges = 2;

@@ -773,8 +773,13 @@ export function getProgress(state, reference) {
     ? reference
     : reference?.id;
   if (bucketId && state.bucketTotals[bucketId] !== undefined) {
+    const displayOverride = state.bucketProgressDisplayOverride?.[bucketId];
+    if (Number.isFinite(displayOverride)) return Math.max(0, Math.min(100, Math.round(displayOverride)));
     const total = state.bucketTotals[bucketId];
-    const collected = state.bucketDisplayedCollected?.[bucketId] ?? state.bucketCollected[bucketId];
+    const collected = Math.max(
+      state.bucketDisplayedCollected?.[bucketId] ?? state.bucketCollected[bucketId],
+      state.bucketBonusCollected?.[bucketId] ?? 0,
+    );
     return total ? Math.min(100, Math.round((collected / total) * 100)) : 100;
   }
   const color = typeof reference === 'string' ? reference : reference?.color;
