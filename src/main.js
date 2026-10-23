@@ -2607,13 +2607,34 @@ function drawScene(now) {
     && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
     && levelOneSourceVideo.currentTime >= 5.5;
   if (showLevelTwoLivePanel) {
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(levelTwoGameplayBackgroundImage, 17, 310, 563, 666);
-    ctx.restore();
-    drawLevelTwoSourcePad();
-    drawPixelWall();
-    drawBuckets();
+    if (levelTwoSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && !levelTwoSourceGameplayVideo.seeking) {
+      // The source clip is already cropped to the game panel. Drawing it as one
+      // aligned layer avoids reusing moving tray pixels as the pad background,
+      // which left a ghost behind the rising green tray and clipped its badge.
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        levelTwoSourceGameplayVideo,
+        0,
+        0,
+        levelTwoSourceGameplayVideo.videoWidth,
+        levelTwoSourceGameplayVideo.videoHeight,
+        17,
+        310,
+        levelTwoSourceGameplayVideo.videoWidth,
+        levelTwoSourceGameplayVideo.videoHeight,
+      );
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelTwoGameplayBackgroundImage, 17, 310, 563, 666);
+      ctx.restore();
+      drawLevelTwoSourcePad();
+      drawPixelWall();
+      drawBuckets();
+    }
   } else if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {

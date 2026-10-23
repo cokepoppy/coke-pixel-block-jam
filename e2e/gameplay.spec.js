@@ -2493,7 +2493,7 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
     expect(comparison.wallDifferentPixelRatio, `source frame ${comparison.sourceFrame} wall alignment: ${JSON.stringify(comparison)}`)
       .toBeLessThan(0.125);
     expect(comparison.differentPixelRatio, `source frame ${comparison.sourceFrame} panel alignment: ${JSON.stringify(comparison)}`)
-      .toBeLessThan(0.12);
+      .toBeLessThan(0.06);
   }
 
   const transitionLayer = page.locator('#dialog-layer');
