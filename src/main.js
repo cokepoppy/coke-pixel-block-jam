@@ -2127,10 +2127,10 @@ function drawLevelOneBrandBackground() {
   ctx.fillRect(0, 0, SCREEN.width, SCREEN.height);
 }
 
-function drawLevelOneBrandLine(text, y, size, colors) {
+function drawLevelOneBrandLine(text, y, size, colors, horizontalScale = 1.62) {
   ctx.save();
   ctx.translate(0, y);
-  ctx.scale(1.36, 1);
+  ctx.scale(horizontalScale, 1);
   ctx.translate(0, -y);
   ctx.font = `1000 ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
   ctx.textAlign = 'center';
@@ -2178,16 +2178,16 @@ function drawLevelOneLocalizedBrandMark(sourceTime) {
   ctx.shadowBlur = 22;
   ctx.shadowOffsetY = 9;
   ctx.beginPath();
-  ctx.arc(0, 0, 124, 0, Math.PI * 2);
-  ctx.fillStyle = gradient(-124, -124, 124, 124, [[0, '#dbe7f2'], [0.38, '#94a7bd'], [0.72, '#e0e6ed'], [1, '#677c98']]);
+  ctx.arc(0, 0, 132, 0, Math.PI * 2);
+  ctx.fillStyle = gradient(-132, -132, 132, 132, [[0, '#dbe7f2'], [0.38, '#94a7bd'], [0.72, '#e0e6ed'], [1, '#677c98']]);
   ctx.fill();
   ctx.lineWidth = 4;
   ctx.strokeStyle = '#f1f8ff';
   ctx.stroke();
   ctx.shadowColor = 'transparent';
   ctx.beginPath();
-  ctx.arc(0, 0, 110, 0, Math.PI * 2);
-  const badge = ctx.createRadialGradient(-32, -48, 8, 0, 0, 112);
+  ctx.arc(0, 0, 114, 0, Math.PI * 2);
+  const badge = ctx.createRadialGradient(-32, -48, 8, 0, 0, 116);
   badge.addColorStop(0, '#294663');
   badge.addColorStop(0.56, '#10273e');
   badge.addColorStop(1, '#071827');
@@ -2203,12 +2203,12 @@ function drawLevelOneLocalizedBrandMark(sourceTime) {
   drawLevelOneBrandLine('方块', -22, 62, {
     light: '#ff8376', face: '#f34b40', shadow: '#cb2e27', outline: '#a32621', deep: '#712019',
   });
-  drawLevelOneBrandLine('大闯关', 40, 42, {
+  drawLevelOneBrandLine('大闯关', 52, 72, {
     light: '#fff7d2', face: '#ffe8a4', shadow: '#f5bd42', outline: '#bd521b', deep: '#87300e',
-  });
-  loadingVoxel(-126, -116, 43, 'purple', -0.18);
-  loadingVoxel(128, -34, 42, 'green', 0.13);
-  loadingVoxel(-151, 4, 41, 'blue', -0.1);
+  }, 1.1);
+  loadingVoxel(-98, -104, 43, 'purple', -0.18);
+  loadingVoxel(109, -47, 42, 'green', 0.13);
+  loadingVoxel(-115, 29, 41, 'blue', -0.1);
   ctx.restore();
 }
 

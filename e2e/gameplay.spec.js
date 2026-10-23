@@ -217,6 +217,31 @@ async function countPixelsInRegion(screenshot, region, matches) {
   return count;
 }
 
+async function findRgbBounds(screenshot, region, matches) {
+  const { data, info } = await sharp(screenshot)
+    .extract(region)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = -1;
+  let bottom = -1;
+  let count = 0;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const offset = (y * info.width + x) * info.channels;
+      if (!matches(data[offset], data[offset + 1], data[offset + 2])) continue;
+      left = Math.min(left, x + region.left);
+      right = Math.max(right, x + region.left);
+      top = Math.min(top, y + region.top);
+      bottom = Math.max(bottom, y + region.top);
+      count += 1;
+    }
+  }
+  return count ? { left, top, right, bottom, count } : null;
+}
+
 async function startLevelOneYellowFrameProbe(page) {
   await page.evaluate(() => {
     const source = document.querySelector('#level-one-source-video');
@@ -1692,6 +1717,35 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
     await expect(page.locator('#live-status')).toContainText(`${color} 像素块，进度 100%`, { timeout: 5_000 });
   }
   await drag(page, 485, 866, 485, 620);
+  await page.evaluate(() => {
+    window.__pbjTransitionFrames = [];
+    const sample = () => {
+      const overlay = document.querySelector('.transition-overlay');
+      const startedAt = Number(overlay?.dataset.transitionStartedAt);
+      if (Number.isFinite(startedAt)) {
+        const elapsedMs = performance.now() - startedAt;
+        if (elapsedMs > 630) return;
+        const logo = document.querySelector('.transition-logo');
+        const preview = document.querySelector('.transition-next-preview');
+        if (logo && preview) {
+          const logoStyle = getComputedStyle(logo);
+          const transform = new DOMMatrixReadOnly(logoStyle.transform);
+          const radius = /circle\(([\d.]+)(%|px)/u.exec(getComputedStyle(preview).clipPath);
+          const radiusValue = radius ? Number(radius[1]) : 0;
+          window.__pbjTransitionFrames.push({
+            elapsedMs,
+            logoScale: Math.hypot(transform.a, transform.b),
+            logoOpacity: Number(logoStyle.opacity),
+            revealRadiusPercent: radius?.[2] === '%'
+              ? radiusValue
+              : (radiusValue / (Math.hypot(innerWidth, innerHeight) / Math.SQRT2)) * 100,
+          });
+        }
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   const sourceVideo = page.locator('#level-one-source-video');
   await expect.poll(() => sourceVideo.evaluate((video) => video.currentTime >= 5.55 && video.currentTime < 5.6), {
     intervals: [10],
@@ -1708,9 +1762,80 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
     intervals: [10],
     timeout: 2_000,
   }).toBeTruthy();
-  await page.screenshot({ path: testInfo.outputPath('level1-brand-full.png') });
+  const fullBrand = await page.screenshot({ path: testInfo.outputPath('level1-brand-full.png') });
+  // Source frame 013 (8.002 s, 597x1296) is the first full-size mark. Compare
+  // localized text by colored row bounds, since the source lettering is English.
+  const rows = {
+    green: {
+      actual: await findRgbBounds(fullBrand, { left: 100, top: 520, width: 400, height: 90 },
+        (r, g, b) => g > 100 && g > r * 1.25 && g > b * 1.12),
+      target: { left: 203, right: 430, top: 533, bottom: 609 },
+      tolerance: { centerX: 8, centerY: 8, width: 15, height: 15 },
+    },
+    red: {
+      actual: await findRgbBounds(fullBrand, { left: 100, top: 590, width: 400, height: 90 },
+        (r, g, b) => r > 120 && r > g * 1.25 && r > b * 1.2),
+      target: { left: 200, right: 411, top: 594, bottom: 679 },
+      tolerance: { centerX: 8, centerY: 8, width: 15, height: 15 },
+    },
+    gold: {
+      actual: await findRgbBounds(fullBrand, { left: 100, top: 650, width: 400, height: 120 },
+        (r, g, b) => r > 145 && g > 70 && r > g * 1.08 && g > b * 1.15),
+      target: { left: 176, right: 395, top: 658, bottom: 750 },
+      tolerance: { centerX: 16, centerY: 10, width: 25, height: 20 },
+    },
+  };
+  for (const [name, row] of Object.entries(rows)) {
+    expect(row.actual, `localized ${name} logo row should be visible`).not.toBeNull();
+    const actualCenterX = (row.actual.left + row.actual.right) / 2;
+    const actualCenterY = (row.actual.top + row.actual.bottom) / 2;
+    const targetCenterX = (row.target.left + row.target.right) / 2;
+    const targetCenterY = (row.target.top + row.target.bottom) / 2;
+    const actualWidth = row.actual.right - row.actual.left + 1;
+    const actualHeight = row.actual.bottom - row.actual.top + 1;
+    const targetWidth = row.target.right - row.target.left + 1;
+    const targetHeight = row.target.bottom - row.target.top + 1;
+    expect(Math.abs(actualCenterX - targetCenterX), `${name} row center should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.centerX);
+    expect(Math.abs(actualCenterY - targetCenterY), `${name} row height should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.centerY);
+    expect(Math.abs(actualWidth - targetWidth), `${name} row width should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.width);
+    expect(Math.abs(actualHeight - targetHeight), `${name} row height should follow source frame 013`).toBeLessThanOrEqual(row.tolerance.height);
+  }
+  await writeFile(testInfo.outputPath('level1-brand-frame-alignment.json'), `${JSON.stringify({
+    reference: 'source frame 013 at 8.002 s, original 597x1296 recording',
+    localizedTextBounds: Object.fromEntries(Object.entries(rows).map(([name, row]) => [name, {
+      actual: row.actual,
+      source: row.target,
+    }])),
+  }, null, 2)}\n`);
   await expect(page.getByRole('status', { name: '正在进入第 2 关' })).toBeVisible();
   await expect(page.locator('.transition-logo')).toContainText('大闯关');
+  const transitionStartedAt = Number(await page.locator('.transition-overlay').getAttribute('data-transition-started-at'));
+  await page.waitForFunction(() => window.__pbjTransitionFrames?.some(({ elapsedMs }) => elapsedMs >= 560));
+  const transitionFrames = await page.evaluate(() => window.__pbjTransitionFrames);
+  const closestFrame = (targetMs) => transitionFrames.reduce((closest, sample) => (
+    Math.abs(sample.elapsedMs - targetMs) < Math.abs(closest.elapsedMs - targetMs) ? sample : closest
+  ));
+  const sourceFrameMarkers = [260, 285, 335, 402, 420, 552].map((targetMs) => ({
+    targetMs,
+    actual: closestFrame(targetMs),
+  }));
+  console.log(`Level 1 source-aligned transition samples: ${JSON.stringify(sourceFrameMarkers)}`);
+  await writeFile(testInfo.outputPath('level1-transition-frame-probe.json'), `${JSON.stringify({
+    sourceReference: '7.802–8.802 s source frames 001–061 at 60 fps',
+    transitionStartedAt,
+    sampledFrames: transitionFrames.length,
+    sourceFrameMarkers,
+    samples: transitionFrames,
+  }, null, 2)}\n`);
+  expect(transitionFrames.length, 'transition shape should be sampled across consecutive rendered frames').toBeGreaterThanOrEqual(25);
+  expect(closestFrame(260).logoScale, 'source mark remains full size through frame 044').toBeGreaterThan(0.98);
+  expect(closestFrame(285).logoScale, 'source mark is about half size at frame 045').toBeGreaterThan(0.3);
+  expect(closestFrame(285).logoScale, 'source mark is about half size at frame 045').toBeLessThan(0.75);
+  expect(closestFrame(335).logoScale, 'source mark quickly reaches a tiny size by frame 048').toBeLessThan(0.1);
+  expect(closestFrame(402).logoOpacity, 'tiny source mark stays visible through frame 052').toBeGreaterThan(0.9);
+  expect(closestFrame(420).logoOpacity, 'source mark disappears as the circular reveal starts').toBe(0);
+  expect(closestFrame(420).revealRadiusPercent, 'circular reveal starts near zero radius').toBeLessThan(10);
+  expect(closestFrame(552).revealRadiusPercent, 'Level 2 panel fills the screen by source frame 061').toBeGreaterThan(150);
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始', { timeout: 2_000 });
 });
 
