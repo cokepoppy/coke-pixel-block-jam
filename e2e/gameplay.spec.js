@@ -354,6 +354,75 @@ async function startLevelOneYellowFrameProbe(page) {
     }, { once: true });
   });
 }
+
+async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
+  await page.evaluate(({ startTime: start, endTime: end }) => {
+    const source = document.querySelector('#level-one-source-video');
+    const game = document.querySelector('#game-canvas');
+    const sourceCanvas = document.createElement('canvas');
+    const gameCanvas = document.createElement('canvas');
+    for (const canvas of [sourceCanvas, gameCanvas]) {
+      canvas.width = 474;
+      canvas.height = 219;
+    }
+    const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+    const gameContext = gameCanvas.getContext('2d', { willReadFrequently: true });
+    const probe = { frames: [], done: false };
+    const seenFrames = new Set();
+    window.__levelOneSourceBoardFrameProbe = probe;
+    let recording = false;
+    let pendingCaptures = 0;
+    let reachedEnd = false;
+    source.addEventListener('play', () => { recording = true; }, { once: true });
+
+    const capture = (callbackTime) => {
+      const sourceTime = source.currentTime;
+      const sourceFrame = Math.round(sourceTime * 60);
+      if (sourceTime >= start && sourceTime < end && !seenFrames.has(sourceFrame)) {
+        seenFrames.add(sourceFrame);
+        sourceContext.drawImage(source, 44, 43, 474, 219, 0, 0, 474, 219);
+        gameContext.drawImage(game, 61, 269, 474, 219, 0, 0, 474, 219);
+        const sourcePixels = sourceContext.getImageData(0, 0, 474, 219).data;
+        const gamePixels = gameContext.getImageData(0, 0, 474, 219).data;
+        let differentPixels = 0;
+        let absoluteColorDifference = 0;
+        for (let offset = 0; offset < sourcePixels.length; offset += 4) {
+          const red = Math.abs(sourcePixels[offset] - gamePixels[offset]);
+          const green = Math.abs(sourcePixels[offset + 1] - gamePixels[offset + 1]);
+          const blue = Math.abs(sourcePixels[offset + 2] - gamePixels[offset + 2]);
+          absoluteColorDifference += red + green + blue;
+          if (red || green || blue) differentPixels += 1;
+        }
+        probe.frames.push({
+          sourceFrame,
+          callbackTime,
+          sourceTime,
+          frameLagMs: (sourceTime - callbackTime) * 1_000,
+          differentPixels,
+          meanAbsoluteColorError: absoluteColorDifference / (474 * 219 * 3),
+        });
+      }
+      if (source.paused && sourceTime >= end - 1 / 60) reachedEnd = true;
+      pendingCaptures -= 1;
+      if (reachedEnd && pendingCaptures === 0) probe.done = true;
+    };
+
+    const sampleVideoFrame = (_now, metadata) => {
+      if (recording && metadata.mediaTime >= start && metadata.mediaTime < end) {
+        pendingCaptures += 1;
+        requestAnimationFrame(() => requestAnimationFrame(() => capture(metadata.mediaTime)));
+      }
+      if (recording && metadata.mediaTime >= end) {
+        reachedEnd = true;
+        if (pendingCaptures === 0) probe.done = true;
+        return;
+      }
+      source.requestVideoFrameCallback(sampleVideoFrame);
+    };
+    source.requestVideoFrameCallback(sampleVideoFrame);
+  }, { startTime, endTime });
+}
+
 async function completeLevelOne(page, assertTransition = false) {
   for (const [x, color] of [[298, '黄色'], [111, '绿色'], [485, '红色']]) {
     await drag(page, x, 866, x, 620);
@@ -930,6 +999,7 @@ test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async 
 });
 
 test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async ({ page }, testInfo) => {
+  test.setTimeout(30_000);
   await page.evaluate(() => {
     const status = document.querySelector('#live-status');
     window.__levelOneColorProgressLog = [];
@@ -937,6 +1007,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
       .observe(status, { childList: true, characterData: true, subtree: true });
   });
 
+  await startLevelOneSourceBoardFrameProbe(page, 3.0, 4.0);
   await drag(page, 111, 866, 111, 620);
   await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 25%', { timeout: 1_500 });
   await expect.poll(() => page.locator('audio').evaluate((audio) => (
@@ -958,7 +1029,23 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
     expect(greenProgress.some((progress) => progress >= minimum && progress <= maximum), `missing green sweep range ${minimum}-${maximum}% in ${greenProgress}`)
       .toBeTruthy();
   }
+  await expect.poll(() => page.evaluate(() => window.__levelOneSourceBoardFrameProbe.done), {
+    timeout: 3_000,
+  }).toBeTruthy();
+  const greenFrameProbe = await page.evaluate(() => window.__levelOneSourceBoardFrameProbe);
+  const greenMismatches = greenFrameProbe.frames.filter(({ differentPixels }) => differentPixels > 0);
+  console.log(`Level 1 green source alignment: ${greenFrameProbe.frames.length} frames, ${greenMismatches.length} mismatches, ${greenFrameProbe.frames[0]?.sourceTime.toFixed(3)}–${greenFrameProbe.frames.at(-1)?.sourceTime.toFixed(3)}s`);
+  await testInfo.attach('level1-green-frame-alignment.json', {
+    body: Buffer.from(JSON.stringify(greenFrameProbe, null, 2)),
+    contentType: 'application/json',
+  });
+  expect(greenFrameProbe.frames.length, 'compare at least 30 decoded green source frames to the rendered board').toBeGreaterThanOrEqual(30);
+  expect(greenFrameProbe.frames[0].sourceTime, 'green source-frame checks should begin near the played segment start').toBeLessThan(3.1);
+  expect(greenFrameProbe.frames.at(-1).sourceTime, 'green source-frame checks should cover the played segment end').toBeGreaterThan(3.9);
+  expect(greenFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every green source board frame should render without pixel changes')
+    .toBeTruthy();
 
+  await startLevelOneSourceBoardFrameProbe(page, 4.0, 5.5);
   await drag(page, 485, 866, 485, 620);
   await expect(page.locator('#live-status')).toContainText('红色 像素块，进度 100%', { timeout: 2_000 });
   await page.screenshot({ path: testInfo.outputPath('level1-red-100.png') });
@@ -969,6 +1056,24 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
     expect(redProgress.some((progress) => progress >= minimum && progress <= maximum), `missing red sweep range ${minimum}-${maximum}%`)
       .toBeTruthy();
   }
+  await expect.poll(() => page.locator('#level-one-source-video').evaluate((video) => video.currentTime >= 5.5), {
+    timeout: 3_000,
+  }).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => window.__levelOneSourceBoardFrameProbe.done), {
+    timeout: 3_000,
+  }).toBeTruthy();
+  const redFrameProbe = await page.evaluate(() => window.__levelOneSourceBoardFrameProbe);
+  const redMismatches = redFrameProbe.frames.filter(({ differentPixels }) => differentPixels > 0);
+  console.log(`Level 1 red source alignment: ${redFrameProbe.frames.length} frames, ${redMismatches.length} mismatches, ${redFrameProbe.frames[0]?.sourceTime.toFixed(3)}–${redFrameProbe.frames.at(-1)?.sourceTime.toFixed(3)}s`);
+  await testInfo.attach('level1-red-frame-alignment.json', {
+    body: Buffer.from(JSON.stringify(redFrameProbe, null, 2)),
+    contentType: 'application/json',
+  });
+  expect(redFrameProbe.frames.length, 'compare at least 40 decoded red source frames to the rendered board').toBeGreaterThanOrEqual(40);
+  expect(redFrameProbe.frames[0].sourceTime, 'red source-frame checks should begin near the played segment start').toBeLessThan(4.1);
+  expect(redFrameProbe.frames.at(-1).sourceTime, 'red source-frame checks should cover the played segment before the brand transition').toBeGreaterThan(5.4);
+  expect(redFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every red source board frame should render without pixel changes')
+    .toBeTruthy();
 });
 
 test('Level 1 设置页暂停并从同一进度继续原画与原声', async ({ page }) => {
