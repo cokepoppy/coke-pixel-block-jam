@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 import {
+  applyLevelEightSecondYellowSourceBoard,
   collectAlongPath,
   createGameState,
+  fillBucket,
   getBucketAt,
 } from '../src/game.js';
 
@@ -53,6 +55,17 @@ function positionOverCell(state, bucket, cell) {
 
 function planFullClear(level) {
   const state = createGameState(level);
+  if (level === 8) {
+    // The source has two recorded opening moves before the remaining board
+    // becomes interactive. Model those completed clips before planning the
+    // ordinary drag route, then mirror their post-clip bucket visibility.
+    fillBucket(state, 'magenta-top');
+    state.moves = 1;
+    fillBucket(state, 'yellow-mid');
+    applyLevelEightSecondYellowSourceBoard(state);
+    const firstMagentaBucket = state.buckets.find((bucket) => bucket.id === 'magenta-top');
+    if (firstMagentaBucket) firstMagentaBucket.visible = false;
+  }
   const emptyBuckets = state.buckets.filter((bucket) => state.bucketTotals[bucket.id] === 0);
   if (emptyBuckets.length) {
     throw new Error(`Level ${level} 的收集槽没有对应像素：${emptyBuckets.map(({ id }) => id).join(', ')}`);
@@ -168,6 +181,38 @@ async function playClearRoute(page, level, actions) {
     await expect.poll(() => page.locator('#game-canvas').evaluate((canvas) => (
       ['red', 'green', 'yellow'].map((color) => Number(canvas.dataset[`progress${color[0].toUpperCase()}${color.slice(1)}`]))
     ))).toEqual([100, 100, 100]);
+  } else if (level === 8) {
+    const dragSourceAction = async (from, to) => {
+      const start = browserPoint(from);
+      const target = browserPoint(to);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(target.x, target.y, { steps: 12 });
+      await page.mouse.up();
+    };
+
+    await dragSourceAction({ x: 467, y: 798 }, { x: 467, y: 724 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-eight-source-held', 'true', { timeout: 10_000 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-magenta-top', '100');
+
+    await dragSourceAction({ x: 297, y: 750 }, { x: 297, y: 690 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-eight-source-held', 'true', { timeout: 10_000 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-yellow-mid', '100');
+
+    for (const action of actions) {
+      const start = browserPoint(action.point);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (const destination of action.destinations) {
+        const target = browserPoint({
+          x: destination.x + action.offset.x,
+          y: destination.y + action.offset.y,
+        });
+        await page.mouse.move(target.x, target.y);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+    }
   } else {
     for (const action of actions) {
       const start = browserPoint(action.point);

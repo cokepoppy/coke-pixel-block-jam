@@ -6,11 +6,11 @@ if (!inputPath) {
   throw new Error('Usage: node scripts/sample-level8-grid.mjs <source-frame> [output.json]');
 }
 
-// At 00:02:54.83 (frame 51) the board has 60 x 39 small cells and no yellow
-// drag ring. Sample that clean gameplay frame so the static board asset does
-// not bake a transient input effect into the wall.
+// At 00:02:54.83 (frame 51) the 60 x 39 wall is stable. A yellow circle is
+// visibly present over the magenta area in opening frames and later changes
+// during play; its visual appearance is preserved, but its cell/feedback role
+// is unresolved, so this sampler records only the visible color evidence.
 const board = { left: 58, top: 309, width: 485, height: 312, cols: 60, rows: 39 };
-const ignoredRing = null;
 const image = await sharp(inputPath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
 const channelCount = image.info.channels;
 
@@ -46,13 +46,9 @@ for (let row = 0; row < board.rows; row += 1) {
   for (let column = 0; column < board.cols; column += 1) {
     const x = board.left + (column + 0.5) * board.width / board.cols;
     const y = board.top + (row + 0.5) * board.height / board.rows;
-    const underRing = ignoredRing && x - board.left >= ignoredRing.left
-      && x - board.left <= ignoredRing.left + ignoredRing.width
-      && y - board.top >= ignoredRing.top
-      && y - board.top <= ignoredRing.top + ignoredRing.height;
-    const color = underRing ? 'M' : classify(rgbAt(x, y));
+    const color = classify(rgbAt(x, y));
     rows[row][column] = color;
-    if (!underRing && color !== '?') sampledColors[color].push(rgbAt(x, y));
+    if (color !== '?') sampledColors[color].push(rgbAt(x, y));
   }
 }
 
@@ -85,7 +81,6 @@ function medianRgb(samples) {
 const result = {
   source: inputPath,
   board,
-  ignoredRing,
   counts: Object.fromEntries(['O', 'M', 'Y'].map((color) => [
     color,
     rows.flat().filter((cell) => cell === color).length,

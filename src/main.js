@@ -1,5 +1,6 @@
 import {
   SCREEN,
+  applyLevelEightSecondYellowSourceBoard,
   collectAlongPath,
   createGameState,
   fillBucket,
@@ -103,10 +104,17 @@ const state = {
   levelTwoSourceTimeline: null,
   levelThreeSourceTimeline: null,
   levelEightSourceTimeline: null,
-  levelEightSourceCandidate: false,
+  levelEightSourceCandidate: null,
   levelEightSourcePanelHeld: false,
+  levelEightSourcePanelClip: 'first-magenta',
+  levelEightSourceBucketId: null,
+  levelEightSourceBoardImage: null,
   levelOneWonPending: false,
 };
+// A direct level preview is a still opening frame until the player interacts.
+// This keeps the preview timer aligned with the recorded 03:00 opening frame;
+// the first accepted drag starts the normal game clock.
+if (hasPreviewLevel) state.game.started = false;
 const levelPixelTileCache = new Map();
 const voxelSpriteCache = new Map();
 const startupSplashBoxImage = new Image();
@@ -148,6 +156,34 @@ levelOneSourceVideo.disablePictureInPicture = true;
 levelOneSourceVideo.setAttribute('aria-hidden', 'true');
 levelOneSourceVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneTutorialVideo, levelOneSourceVideo);
+const levelOneSourcePresentedFrameCanvas = document.createElement('canvas');
+levelOneSourcePresentedFrameCanvas.width = 564;
+levelOneSourcePresentedFrameCanvas.height = 756;
+const levelOneSourcePresentedFrameContext = levelOneSourcePresentedFrameCanvas.getContext('2d', { willReadFrequently: true });
+let levelOneSourcePresentedFrameTime = null;
+window.__levelOneSourcePresentedFrameCanvas = levelOneSourcePresentedFrameCanvas;
+window.__levelOneSourcePresentedFrameTime = levelOneSourcePresentedFrameTime;
+
+function captureLevelOneSourcePresentedFrame(mediaTime = levelOneSourceVideo.currentTime) {
+  if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
+  levelOneSourcePresentedFrameContext.imageSmoothingEnabled = false;
+  levelOneSourcePresentedFrameContext.drawImage(
+    levelOneSourceVideo,
+    0,
+    0,
+    levelOneSourcePresentedFrameCanvas.width,
+    levelOneSourcePresentedFrameCanvas.height,
+  );
+  levelOneSourcePresentedFrameTime = mediaTime;
+  window.__levelOneSourcePresentedFrameTime = mediaTime;
+  return true;
+}
+
+levelOneSourceVideo.addEventListener('loadeddata', () => captureLevelOneSourcePresentedFrame());
+levelOneSourceVideo.addEventListener('seeked', () => {
+  captureLevelOneSourcePresentedFrame();
+  if (state.levelOneSourceTimeline?.color === 'yellow') drawLevelOneSourceFrameToCanvas();
+});
 
 function initialLevelOnePanelReady() {
   if (initialLevel === 1) {
@@ -256,6 +292,42 @@ levelEightSourceAudio.muted = true;
 levelEightSourceAudio.setAttribute('aria-hidden', 'true');
 levelEightSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 document.querySelector('.game-shell')?.append(levelEightSourceAudio);
+const levelEightSecondYellowVideo = document.createElement('video');
+levelEightSecondYellowVideo.id = 'level-eight-second-yellow-video';
+levelEightSecondYellowVideo.src = '/assets/level8/level8-second-yellow.webm';
+levelEightSecondYellowVideo.preload = initialLevel === 8 ? 'auto' : 'none';
+levelEightSecondYellowVideo.playsInline = true;
+levelEightSecondYellowVideo.muted = true;
+levelEightSecondYellowVideo.disablePictureInPicture = true;
+levelEightSecondYellowVideo.setAttribute('aria-hidden', 'true');
+levelEightSecondYellowVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelEightSecondYellowVideo);
+const levelEightSecondYellowAudio = document.createElement('audio');
+levelEightSecondYellowAudio.id = 'level-eight-second-yellow-audio';
+levelEightSecondYellowAudio.src = '/assets/level8/level8-second-yellow-audio.m4a';
+levelEightSecondYellowAudio.preload = initialLevel === 8 ? 'auto' : 'none';
+levelEightSecondYellowAudio.muted = true;
+levelEightSecondYellowAudio.setAttribute('aria-hidden', 'true');
+levelEightSecondYellowAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelEightSecondYellowAudio);
+const LEVEL_EIGHT_SOURCE_CLIPS = {
+  'first-magenta': {
+    video: levelEightSourceGameplayVideo,
+    audio: levelEightSourceAudio,
+    frames: 143,
+    duration: 2.384,
+    bucketId: 'magenta-top',
+    status: '正在收集洋红色像素',
+  },
+  'second-yellow': {
+    video: levelEightSecondYellowVideo,
+    audio: levelEightSecondYellowAudio,
+    frames: 95,
+    duration: 1.6,
+    bucketId: 'yellow-mid',
+    status: '正在收集黄色像素',
+  },
+};
 const levelThirteenUfoReferenceVideo = document.createElement('video');
 levelThirteenUfoReferenceVideo.id = 'level-thirteen-ufo-reference-video';
 levelThirteenUfoReferenceVideo.src = '/assets/level13/ufo-fill-reference.webm';
@@ -1184,10 +1256,11 @@ function drawPixelWall() {
         continue;
       }
     }
-    if (state.game.level === 8 && levelEightBoardImage.complete && levelEightBoardImage.naturalWidth > 0) {
+    if (state.game.level === 8 && (state.levelEightSourceBoardImage
+      || (levelEightBoardImage.complete && levelEightBoardImage.naturalWidth > 0))) {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(levelEightBoardImage, x, y, width, height);
+      ctx.drawImage(state.levelEightSourceBoardImage ?? levelEightBoardImage, x, y, width, height);
       ctx.restore();
 
       const cw = width / cols;
@@ -2267,18 +2340,30 @@ function finishLevelThreeSourcePlayback() {
   }
 }
 
-function drawLevelEightSourcePanelFrame() {
-  const video = levelEightSourceGameplayVideo;
+function getLevelEightSourceClip(clipId) {
+  return LEVEL_EIGHT_SOURCE_CLIPS[clipId] ?? null;
+}
+
+function getLevelEightPanelVideo() {
+  const clipId = state.levelEightSourceTimeline?.clipId ?? state.levelEightSourcePanelClip;
+  return getLevelEightSourceClip(clipId)?.video ?? null;
+}
+
+function drawLevelEightSourcePanelFrame(video = getLevelEightPanelVideo()) {
+  if (!video) return;
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 27, 280, 541, 695);
   ctx.restore();
-  canvas.dataset.levelEightSourceFrame = String(Math.max(0, Math.min(142, Math.round(video.currentTime * 60) - 1)));
+  const clipId = state.levelEightSourceTimeline?.clipId ?? state.levelEightSourcePanelClip;
+  const clip = getLevelEightSourceClip(clipId);
+  canvas.dataset.levelEightSourceClip = clipId;
+  canvas.dataset.levelEightSourceFrame = String(Math.max(0, Math.min((clip?.frames ?? 1) - 1, Math.round(video.currentTime * 60) - 1)));
 }
 
 function scheduleLevelEightSourceFrameDraw(timeline) {
-  const video = levelEightSourceGameplayVideo;
+  const video = timeline.video;
   if (typeof video.requestVideoFrameCallback !== 'function'
       || timeline.frameCallbackPending
       || state.levelEightSourceTimeline !== timeline
@@ -2288,70 +2373,79 @@ function scheduleLevelEightSourceFrameDraw(timeline) {
     timeline.frameCallbackPending = false;
     if (state.levelEightSourceTimeline !== timeline || timeline.completed) return;
     if (!video.paused && !video.seeking && state.game.status !== 'paused' && !document.hidden) {
-      drawLevelEightSourcePanelFrame();
+      drawLevelEightSourcePanelFrame(video);
       if (typeof window.__levelEightSourceFrameObserver === 'function') {
-        window.__levelEightSourceFrameObserver(metadata);
+        window.__levelEightSourceFrameObserver({ ...metadata, clipId: timeline.clipId });
       }
     }
     scheduleLevelEightSourceFrameDraw(timeline);
   });
 }
 
-function syncLevelEightSourceAudio(targetTime, shouldPlay) {
+function syncLevelEightSourceAudio(targetTime, shouldPlay, sourceAudio = levelEightSourceAudio, fallbackDuration = 2.384) {
   if (!shouldPlay || !audio.isUsingSourceMix()) {
-    if (!levelEightSourceAudio.paused) levelEightSourceAudio.pause();
-    if (!levelEightSourceAudio.muted) levelEightSourceAudio.muted = true;
+    if (!sourceAudio.paused) sourceAudio.pause();
+    if (!sourceAudio.muted) sourceAudio.muted = true;
     return;
   }
-  levelEightSourceAudio.muted = false;
-  if (levelEightSourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || levelEightSourceAudio.seeking) return;
-  const duration = Number.isFinite(levelEightSourceAudio.duration) ? levelEightSourceAudio.duration : 2.384;
+  sourceAudio.muted = false;
+  if (sourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || sourceAudio.seeking) return;
+  const duration = Number.isFinite(sourceAudio.duration) ? sourceAudio.duration : fallbackDuration;
   const safeTargetTime = Math.max(0, Math.min(duration - 0.01, targetTime));
-  if (Math.abs(safeTargetTime - levelEightSourceAudio.currentTime) > 0.08) {
-    levelEightSourceAudio.pause();
-    levelEightSourceAudio.currentTime = safeTargetTime;
+  if (Math.abs(safeTargetTime - sourceAudio.currentTime) > 0.08) {
+    sourceAudio.pause();
+    sourceAudio.currentTime = safeTargetTime;
     return;
   }
-  if (safeTargetTime < duration - 0.02 && levelEightSourceAudio.paused) {
-    void levelEightSourceAudio.play().catch(() => {});
+  if (safeTargetTime < duration - 0.02 && sourceAudio.paused) {
+    void sourceAudio.play().catch(() => {});
   }
 }
 
-function beginLevelEightSourcePlayback(now) {
-  const video = levelEightSourceGameplayVideo;
-  if (state.game.level !== 8 || state.game.moves !== 0
-      || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
-  if (state.levelEightSourcePanelHeld || video.currentTime > 0 || video.ended) {
-    video.pause();
-    video.currentTime = 0;
-  }
-  const timeline = { startedAt: now, pausedAt: null, seeking: false, completed: false };
+function beginLevelEightSourcePlayback(clipId, now) {
+  const clip = getLevelEightSourceClip(clipId);
+  const bucket = clip && getBucket(state.game, clip.bucketId);
+  const expectedMoves = clipId === 'first-magenta' ? 0 : 1;
+  if (!clip || !bucket || state.game.level !== 8 || state.game.moves !== expectedMoves
+      || state.game.activeBucketId !== clip.bucketId
+      || clip.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
+
+  clip.video.pause();
+  clip.audio.pause();
+  clip.audio.muted = true;
+  clip.video.currentTime = 0;
+  if (clip.audio.readyState >= HTMLMediaElement.HAVE_METADATA) clip.audio.currentTime = 0;
+  const timeline = { clipId, video: clip.video, audio: clip.audio, frames: clip.frames, duration: clip.duration,
+    bucketId: clip.bucketId, pausedAt: null, seeking: false, completed: false };
   state.levelEightSourceTimeline = timeline;
+  state.levelEightSourcePanelClip = clipId;
+  state.levelEightSourceBucketId = clip.bucketId;
   state.levelEightSourcePanelHeld = false;
   state.game.started = true;
   audio.setSourceMixMode(true);
-  syncLevelEightSourceAudio(0, true);
-  drawLevelEightSourcePanelFrame();
+  syncLevelEightSourceAudio(0, true, clip.audio, clip.duration);
+  drawLevelEightSourcePanelFrame(clip.video);
   if (typeof window.__levelEightSourceFrameObserver === 'function') {
-    window.__levelEightSourceFrameObserver({ mediaTime: video.currentTime, presentedFrames: 0, initial: true });
+    window.__levelEightSourceFrameObserver({ mediaTime: clip.video.currentTime, presentedFrames: 0, initial: true, clipId });
   }
-  void video.play().catch(() => {});
+  void clip.video.play().catch(() => {});
   scheduleLevelEightSourceFrameDraw(timeline);
   return true;
 }
 
 function cancelLevelEightSourcePlayback() {
   state.levelEightSourceTimeline = null;
-  state.levelEightSourceCandidate = false;
+  state.levelEightSourceCandidate = null;
   state.levelEightSourcePanelHeld = false;
-  levelEightSourceGameplayVideo.pause();
-  levelEightSourceAudio.pause();
-  levelEightSourceAudio.muted = true;
-  if (levelEightSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    levelEightSourceGameplayVideo.currentTime = 0;
-  }
-  if (levelEightSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    levelEightSourceAudio.currentTime = 0;
+  state.levelEightSourcePanelClip = 'first-magenta';
+  state.levelEightSourceBucketId = null;
+  state.levelEightSourceBoardImage = null;
+  for (const clip of Object.values(LEVEL_EIGHT_SOURCE_CLIPS)) {
+    clip.video.pause();
+    clip.audio.pause();
+    clip.audio.muted = true;
+    if (clip.video.readyState >= HTMLMediaElement.HAVE_METADATA) clip.video.currentTime = 0;
+    if (clip.audio.readyState >= HTMLMediaElement.HAVE_METADATA) clip.audio.currentTime = 0;
   }
   audio.setSourceMixMode(false);
 }
@@ -2359,27 +2453,72 @@ function cancelLevelEightSourcePlayback() {
 function finishLevelEightSourcePlayback() {
   const timeline = state.levelEightSourceTimeline;
   if (!timeline?.completed) return;
-  const bucket = getBucket(state.game, 'magenta-top');
-  if (bucket) {
-    fillBucket(state.game, bucket.id);
-    bucket.x = 382;
-    bucket.y = 602;
+  const bucket = getBucket(state.game, timeline.bucketId);
+  if (timeline.clipId === 'first-magenta') {
+    if (bucket) {
+      fillBucket(state.game, bucket.id);
+      bucket.x = 382;
+      bucket.y = 602;
+    }
+    state.game.moves = Math.max(1, state.game.moves);
+    canvas.dataset.progressMagentaTop = String(bucket ? getProgress(state.game, bucket) : 0);
+    liveStatus.textContent = '已收集洋红色像素，进度 100%';
+  } else {
+    if (bucket) fillBucket(state.game, bucket.id);
+    const boardImage = document.createElement('canvas');
+    boardImage.width = 485;
+    boardImage.height = 312;
+    const boardContext = boardImage.getContext('2d', { willReadFrequently: true });
+    boardContext.imageSmoothingEnabled = false;
+    boardContext.drawImage(timeline.video, 31, 29, 485, 312, 0, 0, 485, 312);
+    state.levelEightSourceBoardImage = boardImage;
+    const magentaTop = getBucket(state.game, 'magenta-top');
+    if (magentaTop) magentaTop.visible = false;
+    applyLevelEightSecondYellowSourceBoard(state.game);
+    state.game.moves = Math.max(2, state.game.moves);
+    canvas.dataset.progressMagentaTop = String(getProgress(state.game, 'magenta-top'));
+    canvas.dataset.progressYellowMid = String(bucket ? getProgress(state.game, bucket) : 0);
+    canvas.dataset.levelEightRemainingCells = String(state.game.grid.filter(Boolean).length);
+    liveStatus.textContent = '已收集黄色像素，进度 100%';
   }
-  state.game.moves = Math.max(1, state.game.moves);
   state.levelEightSourceTimeline = null;
   state.levelEightSourcePanelHeld = true;
-  levelEightSourceGameplayVideo.pause();
-  syncLevelEightSourceAudio(2.384, false);
+  state.levelEightSourcePanelClip = timeline.clipId;
+  timeline.video.pause();
+  syncLevelEightSourceAudio(timeline.duration, false, timeline.audio, timeline.duration);
   audio.setSourceMixMode(false);
   canvas.dataset.levelEightSourceHeld = 'true';
-  canvas.dataset.progressMagentaTop = String(bucket ? getProgress(state.game, bucket) : 0);
-  liveStatus.textContent = '已收集洋红色像素，进度 100%';
+  canvas.dataset.levelEightSourceClip = timeline.clipId;
+}
+
+function finishLevelEightSourcePlaybackAtLastFrame(timeline) {
+  if (timeline.finishingAtEnd || state.levelEightSourceTimeline !== timeline) return;
+  timeline.finishingAtEnd = true;
+  const { video, audio: sourceAudio, duration } = timeline;
+  const videoDuration = Number.isFinite(video.duration) ? video.duration : duration;
+  const lastFrameTime = Math.max(0, Math.min(timeline.frames / 60, videoDuration - 0.001));
+  video.pause();
+  syncLevelEightSourceAudio(duration, false, sourceAudio, duration);
+
+  const finishAtDecodedFrame = () => {
+    if (state.levelEightSourceTimeline !== timeline) return;
+    drawLevelEightSourcePanelFrame(video);
+    timeline.completed = true;
+    finishLevelEightSourcePlayback();
+  };
+
+  if (!video.seeking && Math.abs(video.currentTime - lastFrameTime) <= (1 / 240)) {
+    finishAtDecodedFrame();
+    return;
+  }
+  video.addEventListener('seeked', finishAtDecodedFrame, { once: true });
+  video.currentTime = lastFrameTime;
 }
 
 function advanceLevelEightSourcePlayback(now) {
   const timeline = state.levelEightSourceTimeline;
-  const video = levelEightSourceGameplayVideo;
   if (!timeline) return;
+  const { video, audio: sourceAudio, duration } = timeline;
   if (state.game.level !== 8) {
     cancelLevelEightSourcePlayback();
     return;
@@ -2388,38 +2527,21 @@ function advanceLevelEightSourcePlayback(now) {
     if (!Number.isFinite(timeline.pausedAt)) {
       timeline.pausedAt = now;
       if (!video.paused) video.pause();
-      syncLevelEightSourceAudio(0, false);
+      syncLevelEightSourceAudio(0, false, sourceAudio, duration);
     }
     return;
   }
   if (Number.isFinite(timeline.pausedAt)) {
-    timeline.startedAt += now - timeline.pausedAt;
     timeline.pausedAt = null;
   }
+  if (timeline.finishingAtEnd) return;
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
 
-  const duration = Number.isFinite(video.duration) ? video.duration : 2.384;
-  const elapsed = Math.max(0, (now - timeline.startedAt) / 1_000);
-  const targetTime = Math.min(duration - (1 / 60), elapsed);
-  const drift = targetTime - video.currentTime;
-  if (Math.abs(drift) > 0.12 && !timeline.completed) {
-    video.pause();
-    levelEightSourceAudio.pause();
-    timeline.seeking = true;
-    video.addEventListener('seeked', () => {
-      if (state.levelEightSourceTimeline !== timeline) return;
-      timeline.seeking = false;
-      if (state.game.status !== 'paused' && !document.hidden) void video.play().catch(() => {});
-    }, { once: true });
-    video.currentTime = targetTime;
-    return;
-  }
-  syncLevelEightSourceAudio(video.currentTime, !timeline.completed);
-  if (!timeline.completed && (video.ended || elapsed >= duration)) {
-    timeline.completed = true;
-    video.pause();
-    syncLevelEightSourceAudio(duration, false);
-    finishLevelEightSourcePlayback();
+  syncLevelEightSourceAudio(video.currentTime, !timeline.completed, sourceAudio, duration);
+  const videoDuration = Number.isFinite(video.duration) ? video.duration : duration;
+  const lastFrameTime = Math.max(0, Math.min(timeline.frames / 60, videoDuration - 0.001));
+  if (!timeline.completed && (video.ended || video.currentTime >= lastFrameTime)) {
+    finishLevelEightSourcePlaybackAtLastFrame(timeline);
   } else if (!timeline.completed && video.paused) {
     void video.play().catch(() => {});
   }
@@ -2617,18 +2739,66 @@ function scheduleLevelOneSourceFrameDraw(timeline) {
     if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
     const presentedAndPlayable = !levelOneSourceVideo.paused && !levelOneSourceVideo.seeking
       && state.game.status !== 'paused' && !document.hidden;
-    if (presentedAndPlayable) {
-      // Canvas RAF can paint the previous decoded video frame when the media
-      // clock advances just after the app's RAF. Refresh only the source-backed
-      // region here; the normal game RAF remains responsible for state updates.
-      drawLevelOneSourceFrameToCanvas();
+    if (!presentedAndPlayable) {
+      scheduleLevelOneSourceFrameDraw(timeline);
+      return;
     }
+    // Queue the next source callback before the canvas work and any test probe
+    // reads, so a slow frame comparison cannot halve the media callback rate.
     scheduleLevelOneSourceFrameDraw(timeline);
-    if (presentedAndPlayable && typeof window.__levelOneSourceFrameObserver === 'function') {
-      // Let frame-accurate E2E probes copy the source and canvas immediately
-      // after this exact presented media frame has been painted.
-      window.__levelOneSourceFrameObserver(metadata);
+    requestAnimationFrame(() => {
+      if (state.levelOneSourceTimeline === timeline && !timeline.completed
+          && !levelOneSourceVideo.paused && !levelOneSourceVideo.seeking
+          && state.game.status !== 'paused' && !document.hidden
+          && captureLevelOneSourcePresentedFrame(levelOneSourceVideo.currentTime)) {
+        // Capture one decoded frame and use that same bitmap for both the
+        // visible canvas and source-alignment probes. Reading the video twice
+        // around its compositor refresh can otherwise pair adjacent frames.
+        drawLevelOneSourceFrameToCanvas();
+        if (typeof window.__levelOneSourceFrameObserver === 'function') {
+          window.__levelOneSourceFrameObserver({
+            ...metadata,
+            mediaTime: levelOneSourcePresentedFrameTime,
+          });
+        }
+      }
+    });
+  });
+}
+
+function completeLevelOneSourceTimeline(timeline) {
+  if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+  if (!levelOneSourceVideo.seeking
+      && captureLevelOneSourcePresentedFrame(levelOneSourceVideo.currentTime)) {
+    drawLevelOneSourceFrameToCanvas();
+  }
+  timeline.completed = true;
+  timeline.videoPlayPending = false;
+  levelOneSourceVideo.pause();
+  levelOneSourceAudio.pause();
+  if (state.levelOneWonPending) {
+    state.game.status = 'won';
+    state.levelOneWonPending = false;
+  }
+}
+
+function requestLevelOneSourceVideoPlayback(timeline) {
+  if (state.levelOneSourceTimeline !== timeline || timeline.completed
+      || state.game.status === 'paused' || document.hidden
+      || levelOneSourceVideo.seeking || !levelOneSourceVideo.paused
+      || timeline.videoPlayPending) return;
+  timeline.videoPlayPending = true;
+  void levelOneSourceVideo.play().then(() => {
+    timeline.videoPlayPending = false;
+    if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+    scheduleLevelOneSourceFrameDraw(timeline);
+    const elapsed = Math.max(0, (performance.now() - timeline.sweep.startedAt) / 1_000);
+    const targetTime = Math.min(timeline.end, timeline.start + elapsed);
+    if (!levelOneSourceVideo.seeking && Math.abs(levelOneSourceVideo.currentTime - targetTime) > 0.05) {
+      levelOneSourceVideo.currentTime = targetTime;
     }
+  }).catch(() => {
+    timeline.videoPlayPending = false;
   });
 }
 
@@ -2645,7 +2815,7 @@ function prepareLevelOneSourceSegment(color) {
 function startLevelOneSourceAnimation(color, sweep) {
   const segment = levelOneSourceSegment(color);
   if (!segment) return;
-  const timeline = { color, ...segment, sweep, completed: false, resumeAfterPause: false };
+  const timeline = { color, ...segment, sweep, completed: false, resumeAfterPause: false, videoPlayPending: false };
   state.levelOneSourceTimeline = timeline;
   levelOneSourceVideo.pause();
 
@@ -2654,16 +2824,7 @@ function startLevelOneSourceAnimation(color, sweep) {
     const elapsed = Math.max(0, (performance.now() - sweep.startedAt) / 1_000);
     const targetTime = Math.min(segment.end, segment.start + elapsed);
     if (targetTime >= segment.end) {
-      const finish = () => {
-        if (state.levelOneSourceTimeline !== timeline) return;
-        timeline.completed = true;
-        levelOneSourceVideo.pause();
-        levelOneSourceAudio.pause();
-        if (state.levelOneWonPending) {
-          state.game.status = 'won';
-          state.levelOneWonPending = false;
-        }
-      };
+      const finish = () => completeLevelOneSourceTimeline(timeline);
       if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) finish();
       else {
         levelOneSourceVideo.addEventListener('seeked', finish, { once: true });
@@ -2671,19 +2832,7 @@ function startLevelOneSourceAnimation(color, sweep) {
       }
       return;
     }
-    const play = () => {
-      if (state.levelOneSourceTimeline !== timeline || state.game.status === 'paused' || document.hidden) return;
-      if (timeline.completed) return;
-      void levelOneSourceVideo.play().then(() => {
-        if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
-        scheduleLevelOneSourceFrameDraw(timeline);
-        const elapsed = Math.max(0, (performance.now() - sweep.startedAt) / 1_000);
-        const targetTime = Math.min(segment.end, segment.start + elapsed);
-        if (Math.abs(levelOneSourceVideo.currentTime - targetTime) > 0.05) {
-          levelOneSourceVideo.currentTime = targetTime;
-        }
-      }).catch(() => {});
-    };
+    const play = () => requestLevelOneSourceVideoPlayback(timeline);
     if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) {
       play();
       return;
@@ -2715,10 +2864,12 @@ function updateLevelOneSourcePlayback() {
       timeline.pauseStartedAt = null;
     }
     timeline.resumeAfterPause = false;
-    void levelOneSourceVideo.play().catch(() => {});
   }
   const elapsed = Math.max(0, (performance.now() - timeline.sweep.startedAt) / 1_000);
   const sourceTime = Math.min(timeline.end, timeline.start + elapsed);
+  if (sourceTime < timeline.end && levelOneSourceVideo.paused && !levelOneSourceVideo.seeking) {
+    requestLevelOneSourceVideoPlayback(timeline);
+  }
   if (!audio.isUsingSourceMix()) {
     levelOneSourceAudio.pause();
   } else if (!timeline.completed && levelOneSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -2730,14 +2881,11 @@ function updateLevelOneSourcePlayback() {
     }
   }
   if (!timeline.completed && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-      && levelOneSourceVideo.currentTime >= timeline.end) {
-    levelOneSourceVideo.pause();
-    levelOneSourceAudio.pause();
-    timeline.completed = true;
-    if (state.levelOneWonPending) {
-      state.game.status = 'won';
-      state.levelOneWonPending = false;
+      && sourceTime >= timeline.end) {
+    if (!levelOneSourceVideo.seeking && levelOneSourceVideo.currentTime < timeline.end) {
+      levelOneSourceVideo.currentTime = timeline.end;
     }
+    completeLevelOneSourceTimeline(timeline);
   }
 }
 
@@ -3131,19 +3279,25 @@ function drawLevelOneSourcePanel(source) {
 
 function drawLevelOneSourceActionPanel() {
   if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
-  const width = levelOneSourceVideo.videoWidth || 564;
-  const height = levelOneSourceVideo.videoHeight || 756;
-  drawLevelOneFadedPanel(levelOneSourceVideo, width, height, width, LEVEL_ONE_ACTION_BLEND_START);
+  const source = levelOneSourcePresentedFrameTime === null
+    ? levelOneSourceVideo
+    : levelOneSourcePresentedFrameCanvas;
+  const width = source.videoWidth || source.width || 564;
+  const height = source.videoHeight || source.height || 756;
+  drawLevelOneFadedPanel(source, width, height, width, LEVEL_ONE_ACTION_BLEND_START);
 }
 
 function drawLevelOneSourceBoardFrame() {
   if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  const source = levelOneSourcePresentedFrameTime === null
+    ? levelOneSourceVideo
+    : levelOneSourcePresentedFrameCanvas;
   const board = state.game.gridRect;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.drawImage(levelOneSourceVideo, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
+  ctx.drawImage(source, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
   ctx.restore();
 }
 
@@ -3298,11 +3452,21 @@ function drawScene(now) {
   advanceLevelOneSweep(now);
   updateLevelOneSourcePlayback();
   updateLevelOneTutorialPlayback();
+  if (canvas.dataset.gameStatus !== state.game.status) canvas.dataset.gameStatus = state.game.status;
+  if (state.game.level === 1) {
+    const remainingCells = String(state.game.grid.filter(Boolean).length);
+    const winPending = String(state.levelOneWonPending);
+    const sourceComplete = String(Boolean(state.levelOneSourceTimeline?.completed));
+    if (canvas.dataset.levelOneRemainingCells !== remainingCells) canvas.dataset.levelOneRemainingCells = remainingCells;
+    if (canvas.dataset.levelOneWinPending !== winPending) canvas.dataset.levelOneWinPending = winPending;
+    if (canvas.dataset.levelOneSourceComplete !== sourceComplete) canvas.dataset.levelOneSourceComplete = sourceComplete;
+  }
   advanceUfoFlight(now);
   const showLevelTwoLivePanel = state.game.level === 2
     && Boolean(state.levelTwoSourceTimeline)
     && levelTwoGameplayBackgroundImage.complete
     && levelTwoGameplayBackgroundImage.naturalWidth > 0;
+  const levelEightPanelVideo = getLevelEightPanelVideo();
   if (state.game.level === 2) {
     canvas.dataset.progressRed = String(getProgress(state.game, 'red'));
     canvas.dataset.progressGreen = String(getProgress(state.game, 'green'));
@@ -3315,6 +3479,7 @@ function drawScene(now) {
   }
   if (state.game.level === 8) {
     canvas.dataset.progressMagentaTop = String(getProgress(state.game, 'magenta-top'));
+    canvas.dataset.progressYellowMid = String(getProgress(state.game, 'yellow-mid'));
     canvas.dataset.levelEightSourceHeld = String(state.levelEightSourcePanelHeld);
   }
   drawBackground();
@@ -3334,7 +3499,7 @@ function drawScene(now) {
     && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
   const showLevelEightSourcePanel = state.game.level === 8
     && (Boolean(state.levelEightSourceTimeline) || state.levelEightSourcePanelHeld)
-    && levelEightSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+    && levelEightPanelVideo?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
   const showLevelThreeOpeningPanel = state.game.level === 3
     && !state.dragging
     && state.game.moves === 0
@@ -3542,12 +3707,18 @@ function onPointerDown(event) {
   state.moveCollected = 0;
   state.game.activeBucketId = bucket.id;
   state.game.invalidAt = null;
-  state.levelEightSourceCandidate = state.game.level === 8
-    && state.game.moves === 0
-    && bucket.id === 'magenta-top'
-    && levelEightSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-  if (state.game.level === 8 && state.levelEightSourcePanelHeld) {
-    state.levelEightSourcePanelHeld = false;
+  state.levelEightSourceBucketId = null;
+  state.levelEightSourceCandidate = null;
+  if (state.game.level === 8) {
+    const candidateClipId = state.game.moves === 0 && bucket.id === 'magenta-top'
+      ? 'first-magenta'
+      : state.game.moves === 1 && bucket.id === 'yellow-mid'
+        ? 'second-yellow'
+        : null;
+    const candidateClip = getLevelEightSourceClip(candidateClipId);
+    if (candidateClip?.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      state.levelEightSourceCandidate = candidateClipId;
+    }
   }
   if (state.game.level === 1) prepareLevelOneSourceSegment(bucket.color);
 }
@@ -3565,13 +3736,28 @@ function onPointerMove(event) {
     state.lastPoint = point;
     return;
   }
-  if (state.levelEightSourceCandidate && state.dragDistance >= 4 && point.y < state.lastPoint.y) {
-    state.levelEightSourceCandidate = false;
-    if (beginLevelEightSourcePlayback(performance.now())) {
-      liveStatus.textContent = '正在收集洋红色像素';
+  if (state.game.level === 8 && state.levelEightSourceBucketId === bucket.id) {
+    state.lastPoint = point;
+    return;
+  }
+  if (state.levelEightSourceCandidate) {
+    if (state.dragDistance < 4) {
       state.lastPoint = point;
       return;
     }
+    const candidateClipId = state.levelEightSourceCandidate;
+    state.levelEightSourceCandidate = null;
+    if (point.y < state.lastPoint.y && beginLevelEightSourcePlayback(candidateClipId, performance.now())) {
+      liveStatus.textContent = getLevelEightSourceClip(candidateClipId).status;
+      state.lastPoint = point;
+      return;
+    }
+    state.levelEightSourcePanelHeld = false;
+  }
+  if (state.game.level === 8 && state.levelEightSourcePanelHeld && state.dragDistance >= 4) {
+    // The source clip is held only as the last verified frame. Once the player
+    // begins another ordinary move, return to the live post-clip board.
+    state.levelEightSourcePanelHeld = false;
   }
 
   if (state.dragDistance >= 4 && !state.game.started) {
@@ -3667,8 +3853,12 @@ function advanceToNextLevel() {
   if (state.game.level === 8) {
     levelEightSourceGameplayVideo.preload = 'auto';
     levelEightSourceAudio.preload = 'auto';
+    levelEightSecondYellowVideo.preload = 'auto';
+    levelEightSecondYellowAudio.preload = 'auto';
     levelEightSourceGameplayVideo.load();
     levelEightSourceAudio.load();
+    levelEightSecondYellowVideo.load();
+    levelEightSecondYellowAudio.load();
   }
   if (state.game.level === 7) state.freezeCharges = 2;
   if (state.game.level === 9) state.hammerCharges = 2;
@@ -3894,8 +4084,8 @@ function onPointerUp(event) {
   const point = mapPointer(event);
   const bucket = getBucket(state.game, state.game.activeBucketId);
   const acceptedLevelEightSource = state.game.level === 8
-    && bucket?.id === 'magenta-top'
-    && (Boolean(state.levelEightSourceTimeline) || state.levelEightSourcePanelHeld);
+    && bucket?.id === state.levelEightSourceBucketId
+    && (state.levelEightSourceTimeline?.bucketId === bucket.id || state.levelEightSourcePanelHeld);
   let acceptedLevelThreeSource = false;
   const reservedLevelThreeSourceMix = bucket && state.game.level === 3
     && bucket.id === 'purple' && state.game.moves === 0;
@@ -3938,7 +4128,7 @@ function onPointerUp(event) {
   state.dragOrigin = null;
   state.dragOffset = null;
   state.dragDistance = 0;
-  state.levelEightSourceCandidate = false;
+  state.levelEightSourceCandidate = null;
   state.game.activeBucketId = null;
   if (state.game.level !== 2) state.game.moves += state.moveCollected > 0 ? 1 : 0;
   if (state.game.level === 2 && !state.levelTwoSourceTimeline) {

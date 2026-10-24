@@ -9,6 +9,7 @@
     "compare:reference": "node scripts/compare-reference.mjs",
     "audit:level1-tutorial": "node scripts/audit-level1-tutorial-source-frames.mjs",
     "audit:level8-first-magenta": "node scripts/audit-level8-first-magenta-source-frames.mjs",
+    "audit:level8-second-yellow": "node scripts/audit-level8-second-yellow-source-frames.mjs",
     "audit:level2-frames": "node scripts/audit-level2-source-frames.mjs",
     "audit:level3-frames": "node scripts/audit-level3-source-frames.mjs",
     "extract:level3-audio": "node scripts/extract-level3-source-audio.mjs",

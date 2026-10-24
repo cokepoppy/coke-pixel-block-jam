@@ -258,6 +258,52 @@ const LEVEL_EIGHT_PIXELS = [
   'YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYOMMMMMMM',
 ];
 
+// Final Level 8 wall at S5 00:02:58.950, sampled at the fitted 60 x 39
+// cell centres. Dots are empty blue cells; two low-confidence samples were
+// assigned from their 8-neighbour majority. The yellow ring remains visible
+// in the source frame, so these are visible colours rather than hidden logic.
+const LEVEL_EIGHT_SECOND_YELLOW_PIXELS = [
+  '.OOOOOOOOOOOO...............................................',
+  'OOOOOOOOOOOOOO..............................................',
+  'OOOOOOOOOOOOOOOO............................................',
+  'OOOOOOOOOOOOOOOOOO..........................................',
+  'OOOOOOOOOOOOOOOOOO..........................................',
+  'OOOOOOOOOOOOOOOOOOO.........................................',
+  'OOOOOOOOOOOOOOOOOOOO........................................',
+  'OOOOOOOOOOOOOOOOOOOOO.......................................',
+  'OOOOOOOOOOOOOOOOOOOOOO......................................',
+  'OOOOOOOOOOOOOOOOOOOOOOO..OOO.O..O........OM.................',
+  'OOOOOOOOOOOOOOOOOOOOOOOO.OOOOO..OO.......OMM................',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.OOMMM...............',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMM..............',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMMM.............',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMMMM............',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMMMMO...........',
+  'OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMMMMOOM.........',
+  'OYYYYOOOOOOOOOMOOOOOOOOOOOOOOOOOOOOOOOOOOMMMMMMMOOMMM.......',
+  'YYYYYYYOOOMMMOMMMMOOOOOOOOOOOOOOOOOOOOOOMMMMMMMMOMMMOM......',
+  'YYYYYYYYOMMMMMMMMMOOOOOOOOOOOOOOOOOOOOOOMMMMMYMMMMMOOMM.....',
+  'YYYYYYYYYMMMMMMMMMOOOOOOOOOOOOOOOOOOOOOOMMMMYMYYMMMMOOOO....',
+  'YYYYYYYYYYMMMMMMMMOOOOOOOOOOOOOOOOOOOOOMMMMMYMMYMMMOOOOOO...',
+  'YYYYYYYYYYYMMMMMMMMOOOOOOOOOOOOOOOOOOOOMMMMMMMMMMMMOOOOOMM..',
+  'YYYYYYYYYYYYMMMMMMMMMOMMOMOOOOOOOMOOOOMMMMMYMMMMMMMOOOOOOMM.',
+  'YYYYYYYYYYYYYMOOMMMMMMMMMMOOOMOOMMMOOMMMMMMYMMMMMMMOOMOOOOOO',
+  'YYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMOMMMMMMMYMMMMMMMOOMOOOOOO',
+  'YYYYYYYYYYYYYYYYYYOMMMMMMMMMMMMMMMMMMMMMMMMYMMMMMMMMMMOMOOOO',
+  'YYYYYYYYYYYYYYYYYYOMMMMMMMMMMMMMMMMMMMMMMMMYYMMMYYYOMMOOOOOO',
+  'YYYYYYYYYYYYYYYYYYOMMMMMMMMMMMMMMMMMMMMMMMMMYMMMMMMMMMOOOOOO',
+  'YYYYYYYYYYYYYYYYYYOMMMMMMMMMMMMMMMMMMMMMMMMMMYMMMMMMMMOOMOOO',
+  'YYYYYYYYYYYYYYYYYYOMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMOO',
+  'YYYYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM',
+  'YYYYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMMMMMMMMMMYMMMMMMMMMMMMM',
+  'YYYYYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMMMMMYMMMMYMMMMMMMMMMMM',
+  'YYYYYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMMMMMYMMMMYMMMMMMMMMMMM',
+  'YYYYYYYYYYYYYYYYYYYYYYYYMMMMMMMMMMMMMMMMMYYMMYOOMMMMOYMMMMMM',
+  'YYYYYYYYYYYYYYYYYYYYYYYYYYYMMMMMYYMMMMMMMYYYYYYYYYYYYYOMYYMM',
+  'YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYMYYYYMMMYMMYYYYYYYYYYYYYYYYYYM',
+  'YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYMYYYYYYYYYYYYYYYYYYYYYY.',
+];
+
 // Clean Level 9 wall from 00:03:33: blue pixel banks, a yellow center, and
 // white banks beneath it. The open centre at the foot of the wall is empty.
 const LEVEL_NINE_PIXELS = [
@@ -460,7 +506,7 @@ const levels = {
     duration: 180,
     buckets: [
       { id: 'yellow-left', color: 'yellow', x: 50, y: 714, width: 164, height: 72 },
-      { id: 'yellow-mid', color: 'yellow', x: 215, y: 714, width: 164, height: 72 },
+      { id: 'yellow-mid', color: 'yellow', x: 215, y: 714, width: 164, height: 72, hideWhenComplete: true },
       { id: 'magenta-top', color: 'magenta', x: 382, y: 706, width: 170, height: 184 },
       { id: 'orange-small', color: 'orange', x: 50, y: 790, width: 80, height: 80 },
       { id: 'yellow-small', color: 'yellow', x: 132, y: 790, width: 80, height: 80 },
@@ -756,6 +802,59 @@ export function createGameState(level = 1) {
     invalidAt: null,
     generation: 1,
   };
+}
+
+export function applyLevelEightSecondYellowSourceBoard(state) {
+  if (state.level !== 8) return false;
+  const { cols, rows, x, y, width, height } = state.config.grid;
+  if (LEVEL_EIGHT_SECOND_YELLOW_PIXELS.length !== rows
+      || LEVEL_EIGHT_SECOND_YELLOW_PIXELS.some((line) => line.length !== cols)) {
+    throw new Error('Level 8 source board data must match the 60 x 39 grid.');
+  }
+
+  const grid = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < cols; column += 1) {
+      const marker = LEVEL_EIGHT_SECOND_YELLOW_PIXELS[row][column];
+      const color = { O: 'orange', M: 'magenta', Y: 'yellow' }[marker];
+      if (!color) {
+        grid.push(null);
+        continue;
+      }
+
+      // The two completed source trays leave the board. Remaining pixels are
+      // assigned to visible same-colour trays by position; this is provisional
+      // because the recording does not show the original touch target.
+      const targetBucketId = color === 'orange'
+        ? (column < 11 ? 'orange-small' : column < 32 ? 'orange-left' : 'orange-mid')
+        : color === 'magenta'
+          ? (row < 27 ? 'magenta-mid' : 'magenta-bottom')
+          : (row >= 23 && column < 13 ? 'yellow-small' : 'yellow-left');
+      grid.push({
+        color,
+        targetBucketId,
+        boardId: 'main',
+        row,
+        column,
+        x: x + ((column + 0.5) * width) / cols,
+        y: y + ((row + 0.5) * height) / rows,
+      });
+    }
+  }
+
+  const { totals, bucketTotals } = countColors(grid, state.buckets);
+  for (const color of COLORS) totals[color] += state.collected[color] ?? 0;
+  for (const bucket of state.buckets) {
+    bucketTotals[bucket.id] += state.bucketCollected[bucket.id] ?? 0;
+    bucket.visible = bucketTotals[bucket.id] > (state.bucketCollected[bucket.id] ?? 0);
+  }
+  state.grid = grid;
+  state.totals = totals;
+  state.bucketTotals = bucketTotals;
+  state.moves = Math.max(state.moves, 2);
+  state.status = 'playing';
+  state.activeBucketId = null;
+  return true;
 }
 
 function getBucketSegments(bucket) {
