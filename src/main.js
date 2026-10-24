@@ -184,6 +184,12 @@ levelOneSourceVideo.addEventListener('seeked', () => {
   captureLevelOneSourcePresentedFrame();
   if (state.levelOneSourceTimeline?.color === 'yellow') drawLevelOneSourceFrameToCanvas();
 });
+for (const eventName of ['pause', 'seeking', 'waiting', 'stalled']) {
+  levelOneSourceVideo.addEventListener(eventName, () => {
+    const timeline = state.levelOneSourceTimeline;
+    if (timeline && !timeline.completed) timeline.awaitingSourceFrame = true;
+  });
+}
 
 function initialLevelOnePanelReady() {
   if (initialLevel === 1) {
@@ -2305,6 +2311,16 @@ function beginLevelThreeSourcePlayback(now) {
   state.levelThreeSourceTimeline = timeline;
   audio.setSourceMixMode(true);
   syncLevelThreeSourceAudio(0, true);
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.seeking && video.currentTime < 1 / 120) {
+    drawLevelThreeSourcePanelFrame();
+    if (typeof window.__levelThreeSourceFrameObserver === 'function') {
+      window.__levelThreeSourceFrameObserver({
+        mediaTime: video.currentTime,
+        presentedFrames: 0,
+        initial: true,
+      });
+    }
+  }
   void video.play().catch(() => {});
   scheduleLevelThreeSourceFrameDraw(timeline);
 }
@@ -2740,6 +2756,7 @@ function scheduleLevelOneSourceFrameDraw(timeline) {
     const presentedAndPlayable = !levelOneSourceVideo.paused && !levelOneSourceVideo.seeking
       && state.game.status !== 'paused' && !document.hidden;
     if (!presentedAndPlayable) {
+      timeline.awaitingSourceFrame = true;
       scheduleLevelOneSourceFrameDraw(timeline);
       return;
     }
@@ -2754,7 +2771,14 @@ function scheduleLevelOneSourceFrameDraw(timeline) {
         // Capture one decoded frame and use that same bitmap for both the
         // visible canvas and source-alignment probes. Reading the video twice
         // around its compositor refresh can otherwise pair adjacent frames.
+        if (!timeline.sourceFramePresented) {
+          const sourceElapsedMs = Math.max(0, (levelOneSourcePresentedFrameTime - timeline.start) * 1_000);
+          timeline.sweep.startedAt = performance.now() - sourceElapsedMs;
+          timeline.sourceFramePresented = true;
+          timeline.mediaPauseStartedAt = null;
+        }
         drawLevelOneSourceFrameToCanvas();
+        timeline.awaitingSourceFrame = false;
         if (typeof window.__levelOneSourceFrameObserver === 'function') {
           window.__levelOneSourceFrameObserver({
             ...metadata,
@@ -2792,11 +2816,6 @@ function requestLevelOneSourceVideoPlayback(timeline) {
     timeline.videoPlayPending = false;
     if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
     scheduleLevelOneSourceFrameDraw(timeline);
-    const elapsed = Math.max(0, (performance.now() - timeline.sweep.startedAt) / 1_000);
-    const targetTime = Math.min(timeline.end, timeline.start + elapsed);
-    if (!levelOneSourceVideo.seeking && Math.abs(levelOneSourceVideo.currentTime - targetTime) > 0.05) {
-      levelOneSourceVideo.currentTime = targetTime;
-    }
   }).catch(() => {
     timeline.videoPlayPending = false;
   });
@@ -2815,7 +2834,16 @@ function prepareLevelOneSourceSegment(color) {
 function startLevelOneSourceAnimation(color, sweep) {
   const segment = levelOneSourceSegment(color);
   if (!segment) return;
-  const timeline = { color, ...segment, sweep, completed: false, resumeAfterPause: false, videoPlayPending: false };
+  const timeline = {
+    color,
+    ...segment,
+    sweep,
+    completed: false,
+    videoPlayPending: false,
+    sourceFramePresented: false,
+    awaitingSourceFrame: true,
+    mediaPauseStartedAt: null,
+  };
   state.levelOneSourceTimeline = timeline;
   levelOneSourceVideo.pause();
 
@@ -2851,26 +2879,22 @@ function updateLevelOneSourcePlayback() {
   const shouldPause = state.game.status === 'paused' || document.hidden;
   if (shouldPause) {
     if (!levelOneSourceVideo.paused || !levelOneSourceAudio.paused) {
-      timeline.resumeAfterPause = true;
-      timeline.pauseStartedAt ??= performance.now();
       levelOneSourceVideo.pause();
       levelOneSourceAudio.pause();
     }
     return;
   }
-  if (timeline.resumeAfterPause && !timeline.completed) {
-    if (timeline.pauseStartedAt) {
-      timeline.sweep.startedAt += performance.now() - timeline.pauseStartedAt;
-      timeline.pauseStartedAt = null;
-    }
-    timeline.resumeAfterPause = false;
-  }
-  const elapsed = Math.max(0, (performance.now() - timeline.sweep.startedAt) / 1_000);
+  const mediaClockNow = timeline.mediaPauseStartedAt ?? performance.now();
+  const elapsed = Math.max(0, (mediaClockNow - timeline.sweep.startedAt) / 1_000);
   const sourceTime = Math.min(timeline.end, timeline.start + elapsed);
   if (sourceTime < timeline.end && levelOneSourceVideo.paused && !levelOneSourceVideo.seeking) {
     requestLevelOneSourceVideoPlayback(timeline);
   }
-  if (!audio.isUsingSourceMix()) {
+  const sourceFrameReady = timeline.sourceFramePresented
+    && !timeline.awaitingSourceFrame
+    && !levelOneSourceVideo.paused
+    && !levelOneSourceVideo.seeking;
+  if (!audio.isUsingSourceMix() || (!timeline.completed && !sourceFrameReady)) {
     levelOneSourceAudio.pause();
   } else if (!timeline.completed && levelOneSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
     if (Math.abs(levelOneSourceAudio.currentTime - sourceTime) > 0.08) {
@@ -2880,9 +2904,12 @@ function updateLevelOneSourcePlayback() {
       void levelOneSourceAudio.play().catch(() => {});
     }
   }
-  if (!timeline.completed && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-      && sourceTime >= timeline.end) {
-    if (!levelOneSourceVideo.seeking && levelOneSourceVideo.currentTime < timeline.end) {
+  if (!timeline.completed && (
+    (sourceFrameReady && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && sourceTime >= timeline.end)
+    || levelOneSourceVideo.ended
+  )) {
+    if (!levelOneSourceVideo.ended && !levelOneSourceVideo.seeking && levelOneSourceVideo.currentTime < timeline.end) {
       levelOneSourceVideo.currentTime = timeline.end;
     }
     completeLevelOneSourceTimeline(timeline);
@@ -2969,6 +2996,32 @@ function addLevelOneSweepParticle(cell, bornAt, arrivalAt, bucket) {
 }
 
 function advanceLevelOneSweep(now) {
+  const timeline = state.levelOneSourceTimeline;
+  if (timeline && !timeline.completed) {
+    const sweep = timeline.sweep;
+    if (state.game.status === 'paused') {
+      if (timeline.mediaPauseStartedAt !== null) {
+        sweep.startedAt += now - timeline.mediaPauseStartedAt;
+        timeline.mediaPauseStartedAt = null;
+      }
+      sweep.pausedAt ??= now;
+    } else {
+      if (sweep.pausedAt) {
+        sweep.startedAt += now - sweep.pausedAt;
+        sweep.pausedAt = null;
+      }
+      if (!timeline.sourceFramePresented) return;
+      if (timeline.awaitingSourceFrame || levelOneSourceVideo.paused || levelOneSourceVideo.seeking || document.hidden) {
+        timeline.mediaPauseStartedAt ??= now;
+        return;
+      }
+      if (timeline.mediaPauseStartedAt !== null) {
+        sweep.startedAt += now - timeline.mediaPauseStartedAt;
+        timeline.mediaPauseStartedAt = null;
+      }
+    }
+  }
+
   for (const bucket of state.game.buckets.filter((candidate) => candidate.sweep && !candidate.sweep.completed)) {
     const sweep = bucket.sweep;
     if (state.game.status === 'paused') {
