@@ -33,6 +33,7 @@ const requestedPreviewReward = query.get('previewReward') === '1';
 const requestedSplashPreview = query.get('previewSplash') === '1';
 const loadingScreenDurationMs = 1783;
 const previewLevelOneAssetGate = hasPreviewLevel && requestedPreviewLevel === 1 && !requestedSplashPreview;
+const previewLevelThreeAssetGate = hasPreviewLevel && requestedPreviewLevel === 3 && !requestedSplashPreview;
 const levelTwoWinSettleDurationMs = 900;
 const levelTwoTransitionDurationMs = 1200;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
@@ -75,7 +76,7 @@ const state = {
   // panel and hand clip are decoded. Otherwise the first paint shows the
   // procedural buckets, then swaps to the source frame and can look like a
   // yellow-slot flash during startup.
-  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate,
+  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate || previewLevelThreeAssetGate,
   loadingPreview: requestedSplashPreview,
   loadingStartedAt: performance.now(),
   lastFrameAt: performance.now(),
@@ -100,6 +101,7 @@ const state = {
   transitionTimer: null,
   levelOneSourceTimeline: null,
   levelTwoSourceTimeline: null,
+  levelThreeSourceTimeline: null,
   levelOneWonPending: false,
 };
 const levelPixelTileCache = new Map();
@@ -126,6 +128,13 @@ levelOneTutorialVideo.loop = false;
 levelOneTutorialVideo.disablePictureInPicture = true;
 levelOneTutorialVideo.setAttribute('aria-hidden', 'true');
 levelOneTutorialVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+const levelOneTutorialFramesImage = new Image();
+if (initialLevel === 1) levelOneTutorialFramesImage.src = '/assets/level1/level1-tutorial-frames.png';
+const levelOneTutorialFrameCanvas = document.createElement('canvas');
+levelOneTutorialFrameCanvas.width = 563;
+levelOneTutorialFrameCanvas.height = 756;
+const levelOneTutorialFrameContext = levelOneTutorialFrameCanvas.getContext('2d');
+let cachedLevelOneTutorialFrame = -1;
 const levelOneSourceVideo = document.createElement('video');
 levelOneSourceVideo.id = 'level-one-source-video';
 levelOneSourceVideo.src = '/assets/level1/level1-source-animation.mp4';
@@ -138,10 +147,19 @@ levelOneSourceVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;he
 if (initialLevel === 1) document.querySelector('.game-shell')?.append(levelOneTutorialVideo, levelOneSourceVideo);
 
 function initialLevelOnePanelReady() {
-  if (initialLevel !== 1) return true;
-  if (!levelOneOpeningPanelImage.complete || levelOneOpeningPanelImage.naturalWidth === 0) return false;
-  return prefersReducedMotion.matches
-    || levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  if (initialLevel === 1) {
+    if (!levelOneOpeningPanelImage.complete || levelOneOpeningPanelImage.naturalWidth === 0) return false;
+    return prefersReducedMotion.matches
+      || (levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        && levelOneTutorialFramesImage.complete
+        && levelOneTutorialFramesImage.naturalWidth > 0);
+  }
+  if (initialLevel === 3) {
+    return levelThreeOpeningPanelImage.complete
+      && levelThreeOpeningPanelImage.naturalWidth > 0
+      && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }
+  return true;
 }
 
 const levelOneSourceAudio = document.createElement('audio');
@@ -192,6 +210,22 @@ levelTwoSourceGameplayVideo.disablePictureInPicture = true;
 levelTwoSourceGameplayVideo.setAttribute('aria-hidden', 'true');
 levelTwoSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 document.querySelector('.game-shell')?.append(levelTwoSourceGameplayVideo);
+const levelThreeOpeningPanelImage = new Image();
+levelThreeOpeningPanelImage.src = '/assets/level3/level3-opening-panel.png';
+const levelThreePanelCanvas = document.createElement('canvas');
+levelThreePanelCanvas.width = 554;
+levelThreePanelCanvas.height = 820;
+const levelThreePanelContext = levelThreePanelCanvas.getContext('2d');
+const levelThreeSourceGameplayVideo = document.createElement('video');
+levelThreeSourceGameplayVideo.id = 'level-three-source-gameplay-video';
+levelThreeSourceGameplayVideo.src = '/assets/level3/level3-gameplay-source.mp4';
+levelThreeSourceGameplayVideo.preload = initialLevel === 3 ? 'auto' : 'none';
+levelThreeSourceGameplayVideo.playsInline = true;
+levelThreeSourceGameplayVideo.muted = true;
+levelThreeSourceGameplayVideo.disablePictureInPicture = true;
+levelThreeSourceGameplayVideo.setAttribute('aria-hidden', 'true');
+levelThreeSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelThreeSourceGameplayVideo);
 const levelThirteenUfoReferenceVideo = document.createElement('video');
 levelThirteenUfoReferenceVideo.id = 'level-thirteen-ufo-reference-video';
 levelThirteenUfoReferenceVideo.src = '/assets/level13/ufo-fill-reference.webm';
@@ -2043,6 +2077,176 @@ function resetLevelTwoSourceAudio() {
   }
 }
 
+const LEVEL_THREE_SOURCE_BUCKET_POSITION_TRACKS = {
+  purple: [[0, 447, 773], [0.25, 436, 621], [0.5, 450, 480], [4.6, 450, 480], [4.75, 450, 624], [5.25, 150, 655], [5.5, 150, 680], [8, 150, 680]],
+  blue: [[0, 149, 872], [1.4, 149, 872], [1.5, 158, 812], [1.75, 118, 505], [2, 51, 480], [8, 51, 480]],
+  yellow: [[0, 49, 773], [3.1, 49, 773], [3.25, 234, 708], [3.5, 351, 480], [5.9, 351, 480], [6, 449, 480], [8, 449, 480]],
+};
+
+const LEVEL_THREE_SOURCE_PROGRESS_TRACKS = {
+  purple: [[0, 0], [0.9, 0], [1, 1], [1.25, 2], [1.5, 36], [1.75, 45], [2, 48], [8, 48]],
+  blue: [[0, 0], [2.25, 0], [2.5, 4], [2.75, 8], [3, 12], [3.25, 18], [3.5, 22], [4, 25], [4.25, 27], [4.5, 28], [4.75, 30], [5, 31], [5.25, 32], [5.5, 34], [5.75, 35], [6, 36], [6.25, 38], [6.5, 39], [6.75, 40], [7, 41], [7.25, 43], [7.5, 44], [8, 45]],
+  yellow: [[0, 0], [4.1, 0], [4.25, 1], [6.25, 1], [6.5, 9], [8, 9]],
+};
+
+function sampleLevelThreeSourceTrack(points, sourceTime) {
+  if (sourceTime <= points[0][0]) return points[0].slice(1);
+  for (let index = 1; index < points.length; index += 1) {
+    const [rightTime, ...rightValue] = points[index];
+    if (sourceTime > rightTime) continue;
+    const [leftTime, ...leftValue] = points[index - 1];
+    const amount = (sourceTime - leftTime) / Math.max(0.001, rightTime - leftTime);
+    return leftValue.map((value, component) => value + (rightValue[component] - value) * amount);
+  }
+  return points.at(-1).slice(1);
+}
+
+function updateLevelThreeSourceGameState(sourceTime, now) {
+  if (!state.levelThreeSourceTimeline?.accepted) return;
+  for (const bucket of state.game.buckets) {
+    const [x, y] = sampleLevelThreeSourceTrack(LEVEL_THREE_SOURCE_BUCKET_POSITION_TRACKS[bucket.id], sourceTime);
+    if (!state.dragging) {
+      bucket.x = x;
+      bucket.y = y;
+    }
+
+    const [sourceProgress] = sampleLevelThreeSourceTrack(LEVEL_THREE_SOURCE_PROGRESS_TRACKS[bucket.id], sourceTime);
+    const targetCollected = Math.round(state.game.bucketTotals[bucket.id] * sourceProgress / 100);
+    const remaining = targetCollected - state.game.bucketCollected[bucket.id];
+    if (remaining > 0) {
+      const cells = fillBucket(state.game, bucket.id, remaining);
+      addCollectedEffects(cells, now, bucket, { announce: false, playSound: false, createParticles: false });
+    }
+  }
+  const summary = state.game.buckets.map((bucket) => `${colorName(bucket.color)} ${getProgress(state.game, bucket)}%`).join('，');
+  if (state.levelThreeSourceTimeline.lastSummary !== summary) {
+    state.levelThreeSourceTimeline.lastSummary = summary;
+    liveStatus.textContent = `收集进度：${summary}`;
+  }
+}
+
+function drawLevelThreeSourcePanelFrame() {
+  const video = levelThreeSourceGameplayVideo;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  drawLevelThreePanelLayer(video, video.videoWidth, video.videoHeight);
+}
+
+function drawLevelThreePanelLayer(source, sourceWidth, sourceHeight) {
+  levelThreePanelContext.save();
+  levelThreePanelContext.globalCompositeOperation = 'source-over';
+  levelThreePanelContext.globalAlpha = 1;
+  levelThreePanelContext.clearRect(0, 0, 554, 820);
+  levelThreePanelContext.imageSmoothingEnabled = false;
+  levelThreePanelContext.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, 554, 820);
+  levelThreePanelContext.globalCompositeOperation = 'destination-in';
+  const lowerEdgeFade = levelThreePanelContext.createLinearGradient(0, 724, 0, 820);
+  lowerEdgeFade.addColorStop(0, 'rgba(0, 0, 0, 1)');
+  lowerEdgeFade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  levelThreePanelContext.fillStyle = lowerEdgeFade;
+  levelThreePanelContext.fillRect(0, 0, 554, 820);
+  levelThreePanelContext.restore();
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(levelThreePanelCanvas, 22, 162);
+  ctx.restore();
+}
+
+function scheduleLevelThreeSourceFrameDraw(timeline) {
+  const video = levelThreeSourceGameplayVideo;
+  if (typeof video.requestVideoFrameCallback !== 'function'
+      || timeline.frameCallbackPending
+      || state.levelThreeSourceTimeline !== timeline
+      || timeline.completed) return;
+  timeline.frameCallbackPending = true;
+  video.requestVideoFrameCallback((_now, metadata) => {
+    timeline.frameCallbackPending = false;
+    if (state.levelThreeSourceTimeline !== timeline || timeline.completed) return;
+    if (!video.paused && !video.seeking && state.game.status !== 'paused' && !document.hidden) {
+      drawLevelThreeSourcePanelFrame();
+      if (typeof window.__levelThreeSourceFrameObserver === 'function') {
+        window.__levelThreeSourceFrameObserver(metadata);
+      }
+    }
+    scheduleLevelThreeSourceFrameDraw(timeline);
+  });
+}
+
+function beginLevelThreeSourcePlayback(now) {
+  const video = levelThreeSourceGameplayVideo;
+  if (state.game.level !== 3 || state.game.moves !== 0) return;
+  if (video.readyState >= HTMLMediaElement.HAVE_METADATA && video.currentTime > 0) {
+    video.pause();
+    video.currentTime = 0;
+  }
+  const timeline = { startedAt: now, pausedAt: null, seeking: false, accepted: false, completed: false };
+  state.levelThreeSourceTimeline = timeline;
+  void video.play().catch(() => {});
+  scheduleLevelThreeSourceFrameDraw(timeline);
+}
+
+function cancelLevelThreeSourcePlayback() {
+  state.levelThreeSourceTimeline = null;
+  levelThreeSourceGameplayVideo.pause();
+  if (levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    levelThreeSourceGameplayVideo.currentTime = 0;
+  }
+}
+
+function finishLevelThreeSourcePlayback() {
+  const timeline = state.levelThreeSourceTimeline;
+  if (!timeline?.completed) return;
+  updateLevelThreeSourceGameState(levelThreeSourceGameplayVideo.duration || 8, performance.now());
+  state.levelThreeSourceTimeline = null;
+  levelThreeSourceGameplayVideo.pause();
+  if (levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    levelThreeSourceGameplayVideo.currentTime = 0;
+  }
+}
+
+function advanceLevelThreeSourcePlayback(now) {
+  const timeline = state.levelThreeSourceTimeline;
+  const video = levelThreeSourceGameplayVideo;
+  if (!timeline || state.game.level !== 3) {
+    if (!video.paused) video.pause();
+    return;
+  }
+  if (state.game.status === 'paused' || document.hidden) {
+    timeline.pausedAt ??= now;
+    if (!video.paused) video.pause();
+    return;
+  }
+  if (Number.isFinite(timeline.pausedAt)) {
+    timeline.startedAt += now - timeline.pausedAt;
+    timeline.pausedAt = null;
+  }
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+
+  const duration = Number.isFinite(video.duration) ? video.duration : 8;
+  const elapsed = Math.max(0, (now - timeline.startedAt) / 1_000);
+  const targetTime = Math.min(duration - (1 / 60), elapsed);
+  const drift = targetTime - video.currentTime;
+  if (Math.abs(drift) > 0.12 && !timeline.completed) {
+    video.pause();
+    timeline.seeking = true;
+    video.addEventListener('seeked', () => {
+      if (state.levelThreeSourceTimeline !== timeline) return;
+      timeline.seeking = false;
+      if (state.game.status !== 'paused' && !document.hidden) void video.play().catch(() => {});
+    }, { once: true });
+    video.currentTime = targetTime;
+    return;
+  }
+  if (timeline.accepted) updateLevelThreeSourceGameState(video.currentTime, now);
+  if (!timeline.completed && elapsed >= duration && video.ended) {
+    timeline.completed = true;
+    updateLevelThreeSourceGameState(duration, now);
+    video.pause();
+  } else if (!timeline.completed && video.paused) {
+    void video.play().catch(() => {});
+  }
+  scheduleLevelThreeSourceFrameDraw(timeline);
+}
+
 function advanceLevelTwoSourcePlayback(now) {
   const timeline = state.levelTwoSourceTimeline;
   const video = levelTwoSourceGameplayVideo;
@@ -2666,6 +2870,28 @@ function drawLevelOneFadedPanel(source, sourceWidth, height, destinationWidth = 
 }
 
 function drawLevelOneSourcePanel(source) {
+  if (source === levelOneTutorialVideo
+      && levelOneTutorialFramesImage.complete
+      && levelOneTutorialFramesImage.naturalWidth > 0) {
+    const frameIndex = Math.min(25, Math.floor(Math.max(0, levelOneTutorialVideo.currentTime) * 60));
+    if (frameIndex !== cachedLevelOneTutorialFrame) {
+      levelOneTutorialFrameContext.clearRect(0, 0, 563, 756);
+      levelOneTutorialFrameContext.imageSmoothingEnabled = false;
+      levelOneTutorialFrameContext.drawImage(
+        levelOneTutorialFramesImage,
+        (frameIndex % 5) * 563,
+        Math.floor(frameIndex / 5) * 756,
+        563,
+        756,
+        0,
+        0,
+        563,
+        756,
+      );
+      cachedLevelOneTutorialFrame = frameIndex;
+    }
+    source = levelOneTutorialFrameCanvas;
+  }
   const sourceWidth = source.videoWidth || source.naturalWidth || 563;
   const sourceHeight = source.videoHeight || source.naturalHeight || 756;
   drawLevelOneFadedPanel(source, sourceWidth, sourceHeight, 563);
@@ -2833,6 +3059,7 @@ function drawScene(now) {
     drawLoadingScreen(now);
     return;
   }
+  advanceLevelThreeSourcePlayback(now);
   advanceLevelTwoSourcePlayback(now);
   advanceLevelTwoCollectionProgress(now);
   advanceLevelOneSweep(now);
@@ -2848,6 +3075,11 @@ function drawScene(now) {
     canvas.dataset.progressGreen = String(getProgress(state.game, 'green'));
     canvas.dataset.progressYellow = String(getProgress(state.game, 'yellow'));
   }
+  if (state.game.level === 3) {
+    canvas.dataset.progressPurple = String(getProgress(state.game, 'purple'));
+    canvas.dataset.progressBlue = String(getProgress(state.game, 'blue'));
+    canvas.dataset.progressYellow = String(getProgress(state.game, 'yellow'));
+  }
   drawBackground();
   drawHeader();
   if (!showLevelTwoLivePanel) drawGameFrame();
@@ -2860,6 +3092,14 @@ function drawScene(now) {
     && state.game.moves === 0
     && levelTwoOpeningPanelImage.complete
     && levelTwoOpeningPanelImage.naturalWidth > 0;
+  const showLevelThreeSourcePanel = state.game.level === 3
+    && Boolean(state.levelThreeSourceTimeline)
+    && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  const showLevelThreeOpeningPanel = state.game.level === 3
+    && !state.dragging
+    && state.game.moves === 0
+    && levelThreeOpeningPanelImage.complete
+    && levelThreeOpeningPanelImage.naturalWidth > 0;
   const showSourceActionPanel = state.game.level === 1
     && Boolean(state.levelOneSourceTimeline);
   const showLevelOneBrandPrelude = showSourceActionPanel
@@ -2922,19 +3162,27 @@ function drawScene(now) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(levelTwoOpeningPanelImage, 17, 310);
     ctx.restore();
+  } else if (showLevelThreeSourcePanel) {
+    // The source clip covers this wall. Skip rebuilding its 1,344 cells on
+    // every animation frame; keep the lower tray visible outside the crop.
+    drawPad();
+    drawBuckets();
   } else {
     drawPixelWall();
     drawPad();
     drawBuckets();
   }
+  if (!showLevelThreeSourcePanel && showLevelThreeOpeningPanel) {
+    drawLevelThreePanelLayer(levelThreeOpeningPanelImage, 554, 820);
+  }
   if (!showLevelTwoLivePanel) drawFlyingSaucer(now);
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
   if (state.game.status === 'tutorial') drawTutorialCard(now);
-  if (!showLevelTwoLivePanel && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
+  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
   const showRecordedUfoFrame = canvas.dataset.ufoVisualSource === 'recorded';
-  if (!showLevelTwoLivePanel && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
+  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
 
-  if (state.game.invalidAt && now - state.game.invalidAt.at < 520) {
+  if (!showLevelThreeSourcePanel && state.game.invalidAt && now - state.game.invalidAt.at < 520) {
     const life = 1 - (now - state.game.invalidAt.at) / 520;
     ctx.save();
     ctx.globalAlpha = life;
@@ -2945,6 +3193,7 @@ function drawScene(now) {
     ctx.stroke();
     ctx.restore();
   }
+  if (showLevelThreeSourcePanel) drawLevelThreeSourcePanelFrame();
 }
 
 function drawTubeLabels() {
@@ -3005,6 +3254,10 @@ function dockLevelTwoBucket(bucket, startedAt) {
 
 function onPointerDown(event) {
   if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
+  if (state.game.level === 3 && state.levelThreeSourceTimeline) {
+    if (state.levelThreeSourceTimeline.completed) finishLevelThreeSourcePlayback();
+    else return;
+  }
   const point = mapPointer(event);
   if (state.ufoMode) {
     const selected = getBucketAt(state.game, point.x, point.y);
@@ -3098,6 +3351,7 @@ function restartCurrentLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  cancelLevelThreeSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
   levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
@@ -3125,6 +3379,7 @@ function advanceToNextLevel() {
   levelOneSourceAudio.pause();
   levelTwoSourceGameplayVideo.pause();
   levelTwoSourceGameplayVideo.currentTime = 0;
+  cancelLevelThreeSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
   levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
@@ -3142,6 +3397,10 @@ function advanceToNextLevel() {
   if (state.game.level === 7) state.freezeCharges = 2;
   if (state.game.level === 9) state.hammerCharges = 2;
   if (state.game.level === 13) state.ufoCharges = 2;
+  if (state.game.level === 3) {
+    levelThreeSourceGameplayVideo.preload = 'auto';
+    levelThreeSourceGameplayVideo.load();
+  }
   state.hammerMode = false;
   state.ufoMode = false;
   closeDialog();
@@ -3356,9 +3615,29 @@ function onPointerUp(event) {
   event.preventDefault();
   const point = mapPointer(event);
   const bucket = getBucket(state.game, state.game.activeBucketId);
+  let acceptedLevelThreeSource = false;
+  if (bucket && state.game.level === 3 && !state.levelThreeSourceTimeline
+      && bucket.id === 'purple' && state.game.moves === 0) {
+    const dockedAtSourcePosition = Math.abs(bucket.x - 447) <= 18 && Math.abs(bucket.y - 480) <= 18;
+    if (dockedAtSourcePosition && state.dragDistance > 5) {
+      beginLevelThreeSourcePlayback(performance.now());
+      if (state.levelThreeSourceTimeline) {
+        state.levelThreeSourceTimeline.accepted = true;
+        bucket.x = 447;
+        bucket.y = 480;
+        state.moveCollected = Math.max(1, state.moveCollected);
+        state.game.started = true;
+        state.game.status = 'playing';
+        acceptedLevelThreeSource = true;
+        liveStatus.textContent = '正在收集紫色像素，进度 0%';
+      }
+    }
+  }
   if (bucket && state.dragDistance > 5) {
     const levelTwoDocked = state.game.level === 2 && dockLevelTwoBucket(bucket, state.dragStartedAt);
-    if (levelTwoDocked) {
+    if (acceptedLevelThreeSource) {
+      // The recorded source track continues the exact, observed first move.
+    } else if (levelTwoDocked) {
       liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
     } else if (state.moveCollected === 0 && state.game.status !== 'won') {
       bucket.x = state.dragOrigin.x;

@@ -26,6 +26,9 @@ try {
       const canvas = document.querySelector('#game-canvas');
       return canvas?.width === 597 && canvas?.height === 1296;
     });
+    await page.waitForFunction((expectedLevel) => (
+      document.querySelector('#live-status')?.textContent === `第 ${expectedLevel} 关开始`
+    ), level);
     await page.waitForTimeout(500);
 
     const outputPath = path.join(outputDirectory, `level-${level}-opening.png`);

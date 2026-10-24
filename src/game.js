@@ -330,7 +330,8 @@ const levels = {
     frame: { x: 22, y: 162, width: 553, height: 958 },
     wall: { x: 42, y: 182, width: 513, height: 300 },
     grid: { x: 59, y: 197, width: 478, height: 276, cols: 48, rows: 28 },
-    pad: { x: 50, y: 503, cols: 5, rows: 4, cellWidth: 97, cellHeight: 95, gap: 3 },
+    // The source tray continues below the opening crop with two more rows.
+    pad: { x: 50, y: 503, cols: 5, rows: 6, cellWidth: 97, cellHeight: 95, gap: 3 },
     buckets: [
       { id: 'purple', color: 'purple', x: 447, y: 773, width: 101, height: 296 },
       { id: 'yellow', color: 'yellow', x: 49, y: 773, width: 101, height: 296 },

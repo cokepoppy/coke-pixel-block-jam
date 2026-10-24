@@ -43,6 +43,11 @@ const levelThreeBoardPixels = await sharp(fileURLToPath(new URL('../assets/level
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true });
+const levelThreeOpeningPanelPixels = await sharp(fileURLToPath(new URL('../assets/level3/level3-opening-panel.png', import.meta.url)))
+  .extract({ left: 0, top: 0, width: 554, height: 724 })
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
 const levelFourBoardCellsPixels = await sharp(fileURLToPath(new URL('../assets/level4/level4-board-cells.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -732,6 +737,9 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
   const captureFrame = async (frameIndex, label) => {
     const sample = await page.evaluate(async (index) => {
       const video = document.querySelector('#level-one-tutorial-video');
+      const atlas = new Image();
+      atlas.src = '/assets/level1/level1-tutorial-frames.png';
+      await atlas.decode();
       const gameCanvas = document.querySelector('#game-canvas');
       const gameContext = gameCanvas.getContext('2d');
       const ratio = gameCanvas.width / 597;
@@ -753,7 +761,17 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
       sourcePanel.height = 756;
       const sourceContext = sourcePanel.getContext('2d');
       sourceContext.imageSmoothingEnabled = false;
-      sourceContext.drawImage(video, 0, 0, 563, 756);
+      sourceContext.drawImage(
+        atlas,
+        (index % 5) * 563,
+        Math.floor(index / 5) * 756,
+        563,
+        756,
+        0,
+        0,
+        563,
+        756,
+      );
 
       const referenceCanvas = document.createElement('canvas');
       referenceCanvas.width = gameCanvas.width;
@@ -860,6 +878,10 @@ test('Level 1 冷启动等开场素材解码后再显示，避免黄色槽首帧
     await page.waitForTimeout(700);
     await route.continue();
   });
+  await page.route('**/assets/level1/level1-tutorial-frames.png', async (route) => {
+    await page.waitForTimeout(1_400);
+    await route.continue();
+  });
   await page.goto('/?previewLevel=1', { waitUntil: 'domcontentloaded' });
 
   const canvas = page.locator('#game-canvas');
@@ -872,6 +894,8 @@ test('Level 1 冷启动等开场素材解码后再显示，避免黄色槽首帧
   await expect.poll(() => tutorialVideo.evaluate((video) => (
     video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
   )), { timeout: 5_000 }).toBeTruthy();
+  await expect(canvas, 'do not start the hand gesture before its lossless source-frame atlas is decoded')
+    .toHaveAttribute('aria-label', '正在加载游戏');
   await expect(canvas).toHaveAttribute('aria-label', '拖动收集槽收集彩色像素方块');
   await expect.poll(() => tutorialVideo.evaluate((video) => video.currentTime > 0.02)).toBeTruthy();
 });
@@ -939,7 +963,7 @@ test('Level 1 冷启动手势自然播放一次后停住，黄色槽不闪回', 
     'the yellow slot and its surrounding panel must remain pixel-stable after the hand stops').toBe(1);
 });
 
-test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', async ({ page }, testInfo) => {
+test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮挡时点一致', async ({ page }, testInfo) => {
   const tutorialVideo = page.locator('#level-one-tutorial-video');
   await expect.poll(() => tutorialVideo.evaluate((video) => (
     video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -947,6 +971,9 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
 
   const alignment = await page.evaluate(async () => {
     const video = document.querySelector('#level-one-tutorial-video');
+    const atlas = new Image();
+    atlas.src = '/assets/level1/level1-tutorial-frames.png';
+    await atlas.decode();
     const game = document.querySelector('#game-canvas');
     const gameContext = game.getContext('2d');
     const ratio = game.width / 597;
@@ -961,6 +988,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
     panelContext.imageSmoothingEnabled = false;
     const yellowSourceRect = { left: 157, top: 738, width: 285, height: 184 };
     const yellowFullRect = { left: 157, top: 738, width: 285, height: 260 };
+    const yellowBadgeRect = { left: 322, top: 738, width: 120, height: 38 };
     const handRect = { left: 277, top: 546, width: 190, height: 210 };
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     video.pause();
@@ -1009,6 +1037,20 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
     const frames = [];
     let firstYellowFull;
     let firstHand;
+    panelContext.drawImage(
+      atlas,
+      (13 % 5) * 563,
+      Math.floor(13 / 5) * 756,
+      563,
+      756,
+      0,
+      0,
+      panel.width,
+      panel.height,
+    );
+    referenceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    referenceContext.drawImage(panel, 17, 226);
+    const clearYellowBadge = read(referenceContext, yellowBadgeRect);
     for (let frameIndex = 0; frameIndex < 26; frameIndex += 1) {
       const targetTime = (frameIndex + 0.5) / 60;
       await new Promise((resolve, reject) => {
@@ -1022,13 +1064,24 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
       panelContext.clearRect(0, 0, panel.width, panel.height);
-      panelContext.drawImage(video, 0, 0, panel.width, panel.height);
+      panelContext.drawImage(
+        atlas,
+        (frameIndex % 5) * 563,
+        Math.floor(frameIndex / 5) * 756,
+        563,
+        756,
+        0,
+        0,
+        panel.width,
+        panel.height,
+      );
       referenceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
       referenceContext.clearRect(0, 0, reference.width, reference.height);
       referenceContext.drawImage(panel, 17, 226);
       const actualYellowSource = read(gameContext, yellowSourceRect);
       const expectedYellowSource = read(referenceContext, yellowSourceRect);
       const actualYellowFull = read(gameContext, yellowFullRect);
+      const actualYellowBadge = read(gameContext, yellowBadgeRect);
       const actualHand = read(gameContext, handRect);
       const expectedHand = read(referenceContext, handRect);
       const yellowFrameMatch = compare(actualYellowSource, expectedYellowSource, yellowSourceRect.width);
@@ -1036,7 +1089,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
       if (!firstYellowFull) firstYellowFull = actualYellowFull.slice();
       if (!firstHand) firstHand = actualHand.slice();
       const yellowStability = compare(actualYellowFull, firstYellowFull, yellowFullRect.width, [
-        { left: 165, top: 0, right: 285, bottom: 38 },
+        { left: 164, top: 0, right: 285, bottom: 77 },
       ]);
       frames.push({
         frameIndex,
@@ -1044,6 +1097,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
         yellowFrameMatch,
         handFrameMatch,
         yellowChangeFromFirstFrame: yellowStability,
+        badgeChangeFromClearFrame: compare(actualYellowBadge, clearYellowBadge, yellowBadgeRect.width),
         handMotionFromFirstFrame: compare(actualHand, firstHand, handRect.width).exactDifferentPixels,
       });
     }
@@ -1057,17 +1111,20 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽全程没有闪跳', asyn
     'each tutorial hand frame must visually match its same-time source frame').toBeTruthy();
   expect(alignment.frames.every(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.visibleDifferentPixels === 0),
     'the yellow slot geometry outside the source hand occlusion must remain visually stable across every tutorial frame').toBeTruthy();
+  expect(alignment.frames.filter(({ badgeChangeFromClearFrame }) => badgeChangeFromClearFrame.visibleDifferentPixels > 0).length,
+    'the source hand should briefly cover the yellow 0% badge during the recorded tutorial').toBeGreaterThan(0);
   expect(alignment.frames[15].handMotionFromFirstFrame, 'the source hand should move during the one-shot tutorial gesture')
     .toBeGreaterThan(1_000);
 
   const summary = {
     sourceRange: alignment.sourceRange,
-    yellowOverlayMask: { left: 165, top: 0, right: 285, bottom: 38, reason: 'source hand crosses the yellow 0% badge during tutorial frames' },
+    yellowHandOcclusionMask: { left: 164, top: 0, right: 285, bottom: 77, reason: 'the source hand crosses the yellow badge and upper-right rim' },
     frameCount: alignment.frames.length,
     visibleHandMismatches: alignment.frames.filter(({ handFrameMatch }) => handFrameMatch.visibleDifferentPixels > 0).length,
     visibleYellowMismatches: alignment.frames.filter(({ yellowFrameMatch }) => yellowFrameMatch.visibleDifferentPixels > 0).length,
     yellowUnstableFrames: alignment.frames.filter(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.visibleDifferentPixels > 0).length,
     yellowCompressionVarianceFrames: alignment.frames.filter(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.exactDifferentPixels > 0).length,
+    yellowBadgeOccludedFrames: alignment.frames.filter(({ badgeChangeFromClearFrame }) => badgeChangeFromClearFrame.visibleDifferentPixels > 0).map(({ frameIndex }) => frameIndex),
     frames: alignment.frames,
   };
   await testInfo.attach('level1-tutorial-26-frame-alignment.json', {
@@ -1849,6 +1906,7 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
 test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ page }) => {
   for (let level = 3; level <= 13; level += 1) {
     await page.goto(`/?previewLevel=${level}`);
+    if (level === 3) await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
     await page.waitForTimeout(500);
     const screenshot = await page.locator('#game-canvas').screenshot();
     const actual = await sharp(screenshot).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -1869,6 +1927,7 @@ test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ 
 test('Level 3 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   await page.goto('/?previewLevel=3');
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
   const screenshot = await page.screenshot();
   const actual = await sharp(screenshot)
     .extract({ left: 59, top: 197, width: 478, height: 276 })
@@ -1880,6 +1939,125 @@ test('Level 3 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
     includeAA: false,
   });
   expect(diff, `Level 3 board changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
+});
+
+test('Level 3 开局主面板无遮挡区与原片逐像素一致，操作垫延伸到六行', async ({ page }) => {
+  await page.goto('/?previewLevel=3');
+  await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
+  expect(createGameState(3).config.pad.rows, 'the source level 3 tray has six rows below the wall').toBe(6);
+
+  const screenshot = await page.screenshot();
+  const actual = await sharp(screenshot)
+    .extract({ left: 22, top: 162, width: 554, height: 724 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const diff = pixelmatch(
+    levelThreeOpeningPanelPixels.data,
+    actual.data,
+    Buffer.alloc(actual.data.length),
+    actual.info.width,
+    actual.info.height,
+    { threshold: 0.12, includeAA: false },
+  );
+  expect(diff, `Level 3 opening panel changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
+
+  const edge = await sharp(screenshot).extract({ left: 22, top: 981, width: 554, height: 2 }).removeAlpha().raw().toBuffer();
+  let edgeError = 0;
+  for (let offset = 0; offset < edge.length / 2; offset += 1) edgeError += Math.abs(edge[offset] - edge[offset + edge.length / 2]);
+  const edgeMeanAbsoluteError = edgeError / (554 * 3);
+  expect(edgeMeanAbsoluteError, 'the source crop should fade into the lower native tray without a horizontal cut').toBeLessThan(5);
+});
+
+test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧匹配且下沿连续', async ({ page }, testInfo) => {
+  test.setTimeout(20_000);
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.goto('/?previewLevel=3');
+  const sourceVideo = page.locator('#level-three-source-gameplay-video');
+  await expect.poll(() => sourceVideo.evaluate((video) => video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA))
+    .toBeTruthy();
+  await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
+
+  await page.evaluate(() => {
+    const video = document.querySelector('#level-three-source-gameplay-video');
+    const game = document.querySelector('#game-canvas');
+    const reference = document.createElement('canvas');
+    reference.width = 554;
+    reference.height = 724;
+    const referenceContext = reference.getContext('2d');
+    const actualContext = game.getContext('2d');
+    const seen = new Set();
+    window.__levelThreePresentedSourceFrames = [];
+    window.__levelThreeSourceFrameComparisons = [];
+    window.__levelThreeSourceFrameObserver = (metadata) => {
+      const frame = Math.round(metadata.mediaTime * 60);
+      if (seen.has(frame)) return;
+      seen.add(frame);
+      window.__levelThreePresentedSourceFrames.push(frame);
+      if (frame % 15 !== 0) return;
+      referenceContext.clearRect(0, 0, 554, 724);
+      referenceContext.drawImage(video, 0, 0, 554, 724, 0, 0, 554, 724);
+      const expected = referenceContext.getImageData(0, 0, 554, 724).data;
+      const actual = actualContext.getImageData(22, 162, 554, 724).data;
+      const edge = actualContext.getImageData(22, 981, 554, 2).data;
+      let differentPixels = 0;
+      let edgeError = 0;
+      for (let offset = 0; offset < actual.length; offset += 4) {
+        if (actual[offset] !== expected[offset]
+          || actual[offset + 1] !== expected[offset + 1]
+          || actual[offset + 2] !== expected[offset + 2]) differentPixels += 1;
+      }
+      for (let offset = 0; offset < edge.length / 2; offset += 1) edgeError += Math.abs(edge[offset] - edge[offset + edge.length / 2]);
+      window.__levelThreeSourceFrameComparisons.push({
+        frame,
+        mediaTime: metadata.mediaTime,
+        differentPixels,
+        ratio: differentPixels / (554 * 724),
+        bottomEdgeMae: edgeError / (554 * 4),
+      });
+    };
+  });
+
+  await dragAt60Hz(page, 500, 921, 500, 628, 500);
+  await expect(page.locator('#live-status')).toContainText('紫色');
+  await expect.poll(() => page.evaluate(() => (
+    window.__levelThreeSourceFrameComparisons?.some(({ frame }) => frame >= 465)
+  )), { timeout: 10_000 }).toBeTruthy();
+
+  const presentedFrames = await page.evaluate(() => window.__levelThreePresentedSourceFrames);
+  const comparison = await page.evaluate(() => window.__levelThreeSourceFrameComparisons);
+  expect(presentedFrames.length, 'the browser should present frames throughout the 8-second source clip')
+    .toBeGreaterThanOrEqual(250);
+  expect(presentedFrames[0]).toBeLessThanOrEqual(5);
+  expect(presentedFrames.at(-1)).toBeGreaterThanOrEqual(465);
+  expect(presentedFrames.every((frame, index) => index === 0 || frame > presentedFrames[index - 1]))
+    .toBeTruthy();
+  expect(comparison.length, 'compare source-aligned frames across the full clip').toBeGreaterThanOrEqual(30);
+  expect(comparison.every(({ ratio }) => ratio === 0), 'each compared canvas frame should match its presented source frame exactly')
+    .toBeTruthy();
+  expect(comparison.every(({ bottomEdgeMae }) => bottomEdgeMae < 5), 'the lower edge should remain continuous throughout source playback')
+    .toBeTruthy();
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-purple', '48');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-blue', '45');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-yellow', '9');
+  expect(pageErrors).toEqual([]);
+  const browserAlignment = {
+    source: 'User recording S5 Level 3 00:19.9-00:27.9, 60 fps, exact pixel match on crop x22 y162 554x724; lower 96 px fades into native bucket layer',
+    presentedFrameCount: presentedFrames.length,
+    firstPresentedFrame: presentedFrames[0],
+    lastPresentedFrame: presentedFrames.at(-1),
+    pixelComparedFrameCount: comparison.length,
+    changedPixels: comparison.reduce((total, { differentPixels }) => total + differentPixels, 0),
+    comparedFrames: comparison,
+  };
+  const browserAlignmentDirectory = new URL('../.research/events/level3-60fps/browser/', import.meta.url);
+  await mkdir(browserAlignmentDirectory, { recursive: true });
+  await writeFile(new URL('frame-alignment.json', browserAlignmentDirectory), `${JSON.stringify(browserAlignment, null, 2)}\n`);
+  await testInfo.attach('level3-source-frame-alignment.json', {
+    body: JSON.stringify(browserAlignment, null, 2),
+    contentType: 'application/json',
+  });
 });
 
 test('Level 4 开局未被红槽与阴影遮挡的棋盘像素与录屏一致', async ({ page }) => {
