@@ -1906,7 +1906,7 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   expect(diff, `Level 2 board changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
 });
 
-test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ page }) => {
+test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ page }, testInfo) => {
   for (let level = 3; level <= 13; level += 1) {
     await page.goto(`/?previewLevel=${level}`);
     if (level === 3) await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
@@ -1919,10 +1919,33 @@ test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ 
       .toBuffer({ resolveWithObject: true });
     expect(expected.info.width, `level ${level} preview width`).toBe(597);
     expect(expected.info.height, `level ${level} preview height`).toBe(1296);
-    const diff = pixelmatch(expected.data, actual.data, Buffer.alloc(actual.data.length), 597, 1296, {
+    const diffPixels = Buffer.alloc(actual.data.length);
+    const diff = pixelmatch(expected.data, actual.data, diffPixels, 597, 1296, {
       threshold: 0.12,
       includeAA: false,
     });
+    if (diff > 0) {
+      let left = 597;
+      let top = 1296;
+      let right = -1;
+      let bottom = -1;
+      for (let offset = 0; offset < diffPixels.length; offset += 4) {
+        if (diffPixels[offset + 3] === 0) continue;
+        const pixel = offset / 4;
+        const x = pixel % 597;
+        const y = Math.floor(pixel / 597);
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+      console.log(`level ${level} transition preview changed ${diff} pixels in x=${left}..${right}, y=${top}..${bottom}`);
+      await testInfo.attach(`level-${level}-transition-actual.png`, { body: screenshot, contentType: 'image/png' });
+      await testInfo.attach(`level-${level}-transition-diff.png`, {
+        body: await sharp(diffPixels, { raw: { width: 597, height: 1296, channels: 4 } }).png().toBuffer(),
+        contentType: 'image/png',
+      });
+    }
     expect(diff, `level ${level} transition preview should match its opening canvas`).toBe(0);
   }
 });
@@ -3171,6 +3194,116 @@ test('Level 8 开局显示录屏中的完整橙色与洋红色顶行', async ({ 
   expect(topRow.magenta[0]).toBeGreaterThan(190);
   expect(topRow.magenta[1]).toBeLessThan(60);
   expect(topRow.magenta[2]).toBeGreaterThan(190);
+});
+
+test('Level 8 洋红槽真实拖动后逐帧播放并对齐原作片段', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  await page.goto('/?previewLevel=8');
+  const sourceVideo = page.locator('#level-eight-source-gameplay-video');
+  await expect.poll(() => sourceVideo.evaluate((video) => (
+    video.readyState >= 2 && video.videoWidth === 541 && video.videoHeight === 695
+  ))).toBe(true);
+
+  await page.evaluate(() => {
+    window.__levelEightSourcePlaybackFrames = [];
+    window.__levelEightSourceFrameObserver = ({ mediaTime, presentedFrames }) => {
+      window.__levelEightSourcePlaybackFrames.push({
+        frame: Math.max(0, Math.round(mediaTime * 60) - 1),
+        mediaTime,
+        presentedFrames,
+      });
+    };
+  });
+  await dragAt60Hz(page, 467, 798, 467, 724, 216);
+  await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-eight-source-frame')))
+    .toBeGreaterThan(6);
+  const sourceAudio = page.locator('#level-eight-source-audio');
+  const audioDuringPlayback = await sourceAudio.evaluate((audioElement) => ({
+    paused: audioElement.paused,
+    muted: audioElement.muted,
+    time: audioElement.currentTime,
+  }));
+  expect(audioDuringPlayback.paused, 'the original mixed audio should play during the recorded drag').toBe(false);
+  expect(audioDuringPlayback.muted, 'the original mixed audio should remain audible when both sound settings are enabled').toBe(false);
+  const videoTimeDuringPlayback = await sourceVideo.evaluate((video) => video.currentTime);
+  expect(Math.abs(audioDuringPlayback.time - videoTimeDuringPlayback), 'source sound and picture must stay aligned')
+    .toBeLessThanOrEqual(0.1);
+
+  const playbackFrames = await page.evaluate(() => window.__levelEightSourcePlaybackFrames);
+  const playbackFrameIndices = [...new Set(playbackFrames.map(({ frame }) => frame))].sort((left, right) => left - right);
+  expect(playbackFrameIndices.length, 'a real upward drag should start the source-aligned playback').toBeGreaterThan(8);
+  expect(playbackFrameIndices[0], 'the source recording should start at its first gameplay frame').toBe(0);
+  for (let index = 1; index < playbackFrameIndices.length; index += 1) {
+    expect(playbackFrameIndices[index] - playbackFrameIndices[index - 1], 'normal-speed playback must not stall across multiple frames')
+      .toBeLessThanOrEqual(3);
+  }
+
+  await page.locator('#settings-button').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => sourceAudio.evaluate((audioElement) => audioElement.paused))
+    .toBe(true);
+  const frameAudit = await page.evaluate(async () => {
+    const video = document.querySelector('#level-eight-source-gameplay-video');
+    const gameCanvas = document.querySelector('#game-canvas');
+    const gameContext = gameCanvas.getContext('2d');
+    const expectedCanvas = document.createElement('canvas');
+    expectedCanvas.width = 541;
+    expectedCanvas.height = 695;
+    const expectedContext = expectedCanvas.getContext('2d');
+    const waitForSeek = (targetTime) => new Promise((resolve) => {
+      const onSeeked = () => resolve();
+      video.addEventListener('seeked', onSeeked, { once: true });
+      video.currentTime = targetTime;
+    });
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const frames = [];
+    for (let frame = 0; frame < 143; frame += 1) {
+      await waitForSeek(frame / 60);
+      await nextFrame();
+      await nextFrame();
+      expectedContext.drawImage(video, 0, 0, 541, 695);
+      const expected = expectedContext.getImageData(0, 0, 541, 695).data;
+      const actual = gameContext.getImageData(27, 280, 541, 695).data;
+      let differentPixels = 0;
+      for (let offset = 0; offset < expected.length; offset += 4) {
+        if (expected[offset] !== actual[offset]
+            || expected[offset + 1] !== actual[offset + 1]
+            || expected[offset + 2] !== actual[offset + 2]) differentPixels += 1;
+      }
+      frames.push({
+        frame,
+        requestedTime: frame / 60,
+        currentTime: video.currentTime,
+        renderedFrame: Number(gameCanvas.dataset.levelEightSourceFrame),
+        differentPixels,
+      });
+    }
+    const differentCounts = frames.map(({ differentPixels }) => differentPixels).sort((left, right) => left - right);
+    return {
+      sourceFrames: frames.length,
+      seekTimesWithinOneFrame: frames.every(({ requestedTime, currentTime }) => Math.abs(requestedTime - currentTime) <= 0.018),
+      seekTimeMismatches: frames.filter(({ requestedTime, currentTime }) => Math.abs(requestedTime - currentTime) > 0.018).slice(0, 16),
+      framesWithPixelDifferences: frames.filter(({ differentPixels }) => differentPixels > 0).length,
+      maxDifferentPixels: differentCounts.at(-1),
+      p95DifferentPixels: differentCounts[Math.floor(differentCounts.length * 0.95)],
+      frames,
+    };
+  });
+  await testInfo.attach('level8-first-magenta-frame-audit.json', {
+    body: Buffer.from(JSON.stringify({ playbackFrames, frameAudit }, null, 2)),
+    contentType: 'application/json',
+  });
+  expect(frameAudit.sourceFrames).toBe(143);
+  expect(frameAudit.seekTimesWithinOneFrame,
+    `each source frame seek must land within one source frame: ${JSON.stringify(frameAudit.seekTimeMismatches)}`).toBe(true);
+  expect(frameAudit.framesWithPixelDifferences, 'the cropped source panel must align pixel-for-pixel on every frame')
+    .toBe(0);
+
+  await page.getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(() => page.locator('#game-canvas').getAttribute('data-level-eight-source-held'), { timeout: 10_000 })
+    .toBe('true');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-magenta-top', '100');
+  await expect(page.locator('#live-status')).toContainText('洋红色像素');
 });
 
 test('Level 10 开局棋盘与录屏 04:23 源帧逐像素一致', async ({ page }) => {
