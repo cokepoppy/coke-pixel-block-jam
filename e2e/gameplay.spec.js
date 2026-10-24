@@ -2060,6 +2060,62 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
   });
 });
 
+test('Level 3 首拖播放原作混合音轨并与视频同步，设置暂停后从同一位置续播', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.goto('/?previewLevel=3');
+  const sourceVideo = page.locator('#level-three-source-gameplay-video');
+  const sourceAudio = page.locator('#level-three-source-audio');
+  await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
+  await expect.poll(() => sourceAudio.evaluate((element) => element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA))
+    .toBeTruthy();
+
+  await dragAt60Hz(page, 500, 921, 500, 628, 500);
+  await expect.poll(() => sourceAudio.evaluate((element) => (
+    !element.paused && !element.muted && element.currentTime > 0.35
+  ))).toBeTruthy();
+  await expect.poll(() => sourceVideo.evaluate((element) => element.currentTime > 0.35)).toBeTruthy();
+  const initialSync = await page.evaluate(() => ({
+    audio: document.querySelector('#level-three-source-audio').currentTime,
+    video: document.querySelector('#level-three-source-gameplay-video').currentTime,
+  }));
+  expect(Math.abs(initialSync.audio - initialSync.video), 'the Level 3 source audio should follow its 60 fps video').toBeLessThan(0.08);
+
+  await page.getByRole('button', { name: '打开设置' }).click();
+  await expect.poll(() => sourceAudio.evaluate((element) => element.paused && element.muted)).toBeTruthy();
+  await expect.poll(() => sourceVideo.evaluate((element) => element.paused)).toBeTruthy();
+  const paused = await page.evaluate(() => ({
+    audio: document.querySelector('#level-three-source-audio').currentTime,
+    video: document.querySelector('#level-three-source-gameplay-video').currentTime,
+  }));
+  await page.waitForTimeout(250);
+  const held = await page.evaluate(() => ({
+    audio: document.querySelector('#level-three-source-audio').currentTime,
+    video: document.querySelector('#level-three-source-gameplay-video').currentTime,
+  }));
+  expect(Math.abs(held.audio - paused.audio), 'source audio should hold while settings are open').toBeLessThan(0.04);
+  expect(Math.abs(held.video - paused.video), 'source video should hold while settings are open').toBeLessThan(0.04);
+
+  const dialog = page.getByRole('dialog', { name: '游戏设置' });
+  const effectsToggle = dialog.locator('[data-toggle="effects"]');
+  await effectsToggle.click();
+  await dialog.getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(() => sourceVideo.evaluate((element) => !element.paused)).toBeTruthy();
+  await expect.poll(() => sourceAudio.evaluate((element) => element.paused && element.muted)).toBeTruthy();
+
+  await page.getByRole('button', { name: '打开设置' }).click();
+  await page.getByRole('dialog', { name: '游戏设置' }).locator('[data-toggle="effects"]').click();
+  await page.getByRole('dialog', { name: '游戏设置' }).getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(() => sourceAudio.evaluate((element) => !element.paused && !element.muted)).toBeTruthy();
+  const resumed = await page.evaluate(() => ({
+    audio: document.querySelector('#level-three-source-audio').currentTime,
+    video: document.querySelector('#level-three-source-gameplay-video').currentTime,
+  }));
+  expect(resumed.audio, 'reenabling source-mix settings should resume after the pause point')
+    .toBeGreaterThan(paused.audio + 0.1);
+  expect(Math.abs(resumed.audio - resumed.video), 'source audio and video should resynchronize after settings resume')
+    .toBeLessThan(0.08);
+});
+
 test('Level 4 开局未被红槽与阴影遮挡的棋盘像素与录屏一致', async ({ page }) => {
   await page.goto('/?previewLevel=4');
   await page.emulateMedia({ reducedMotion: 'reduce' });

@@ -157,7 +157,8 @@ function initialLevelOnePanelReady() {
   if (initialLevel === 3) {
     return levelThreeOpeningPanelImage.complete
       && levelThreeOpeningPanelImage.naturalWidth > 0
-      && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && levelThreeSourceAudio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
   }
   return true;
 }
@@ -226,6 +227,14 @@ levelThreeSourceGameplayVideo.disablePictureInPicture = true;
 levelThreeSourceGameplayVideo.setAttribute('aria-hidden', 'true');
 levelThreeSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 document.querySelector('.game-shell')?.append(levelThreeSourceGameplayVideo);
+const levelThreeSourceAudio = document.createElement('audio');
+levelThreeSourceAudio.id = 'level-three-source-audio';
+levelThreeSourceAudio.src = '/assets/level3/level3-source-audio.m4a';
+levelThreeSourceAudio.preload = initialLevel === 3 ? 'auto' : 'none';
+levelThreeSourceAudio.muted = true;
+levelThreeSourceAudio.setAttribute('aria-hidden', 'true');
+levelThreeSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelThreeSourceAudio);
 const levelThirteenUfoReferenceVideo = document.createElement('video');
 levelThirteenUfoReferenceVideo.id = 'level-thirteen-ufo-reference-video';
 levelThirteenUfoReferenceVideo.src = '/assets/level13/ufo-fill-reference.webm';
@@ -2077,6 +2086,26 @@ function resetLevelTwoSourceAudio() {
   }
 }
 
+function syncLevelThreeSourceAudio(targetTime, shouldPlay) {
+  if (!shouldPlay || !audio.isUsingSourceMix()) {
+    levelThreeSourceAudio.pause();
+    levelThreeSourceAudio.muted = true;
+    return;
+  }
+  levelThreeSourceAudio.muted = false;
+  if (levelThreeSourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || levelThreeSourceAudio.seeking) return;
+  const duration = Number.isFinite(levelThreeSourceAudio.duration) ? levelThreeSourceAudio.duration : 8;
+  const safeTargetTime = Math.max(0, Math.min(duration - 0.01, targetTime));
+  if (Math.abs(safeTargetTime - levelThreeSourceAudio.currentTime) > 0.08) {
+    levelThreeSourceAudio.pause();
+    levelThreeSourceAudio.currentTime = safeTargetTime;
+    return;
+  }
+  if (safeTargetTime < duration - 0.02 && levelThreeSourceAudio.paused) {
+    void levelThreeSourceAudio.play().catch(() => {});
+  }
+}
+
 const LEVEL_THREE_SOURCE_BUCKET_POSITION_TRACKS = {
   purple: [[0, 447, 773], [0.25, 436, 621], [0.5, 450, 480], [4.6, 450, 480], [4.75, 450, 624], [5.25, 150, 655], [5.5, 150, 680], [8, 150, 680]],
   blue: [[0, 149, 872], [1.4, 149, 872], [1.5, 158, 812], [1.75, 118, 505], [2, 51, 480], [8, 51, 480]],
@@ -2180,6 +2209,8 @@ function beginLevelThreeSourcePlayback(now) {
   }
   const timeline = { startedAt: now, pausedAt: null, seeking: false, accepted: false, completed: false };
   state.levelThreeSourceTimeline = timeline;
+  audio.setSourceMixMode(true);
+  syncLevelThreeSourceAudio(0, true);
   void video.play().catch(() => {});
   scheduleLevelThreeSourceFrameDraw(timeline);
 }
@@ -2187,6 +2218,12 @@ function beginLevelThreeSourcePlayback(now) {
 function cancelLevelThreeSourcePlayback() {
   state.levelThreeSourceTimeline = null;
   levelThreeSourceGameplayVideo.pause();
+  levelThreeSourceAudio.pause();
+  levelThreeSourceAudio.muted = true;
+  if (levelThreeSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    levelThreeSourceAudio.currentTime = 0;
+  }
+  audio.setSourceMixMode(false);
   if (levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
     levelThreeSourceGameplayVideo.currentTime = 0;
   }
@@ -2198,6 +2235,12 @@ function finishLevelThreeSourcePlayback() {
   updateLevelThreeSourceGameState(levelThreeSourceGameplayVideo.duration || 8, performance.now());
   state.levelThreeSourceTimeline = null;
   levelThreeSourceGameplayVideo.pause();
+  levelThreeSourceAudio.pause();
+  levelThreeSourceAudio.muted = true;
+  if (levelThreeSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    levelThreeSourceAudio.currentTime = 0;
+  }
+  audio.setSourceMixMode(false);
   if (levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
     levelThreeSourceGameplayVideo.currentTime = 0;
   }
@@ -2208,11 +2251,14 @@ function advanceLevelThreeSourcePlayback(now) {
   const video = levelThreeSourceGameplayVideo;
   if (!timeline || state.game.level !== 3) {
     if (!video.paused) video.pause();
+    levelThreeSourceAudio.pause();
+    levelThreeSourceAudio.muted = true;
     return;
   }
   if (state.game.status === 'paused' || document.hidden) {
     timeline.pausedAt ??= now;
     if (!video.paused) video.pause();
+    syncLevelThreeSourceAudio(0, false);
     return;
   }
   if (Number.isFinite(timeline.pausedAt)) {
@@ -2227,6 +2273,7 @@ function advanceLevelThreeSourcePlayback(now) {
   const drift = targetTime - video.currentTime;
   if (Math.abs(drift) > 0.12 && !timeline.completed) {
     video.pause();
+    levelThreeSourceAudio.pause();
     timeline.seeking = true;
     video.addEventListener('seeked', () => {
       if (state.levelThreeSourceTimeline !== timeline) return;
@@ -2236,11 +2283,16 @@ function advanceLevelThreeSourcePlayback(now) {
     video.currentTime = targetTime;
     return;
   }
-  if (timeline.accepted) updateLevelThreeSourceGameState(video.currentTime, now);
+  if (timeline.accepted) {
+    syncLevelThreeSourceAudio(video.currentTime, !timeline.completed);
+    updateLevelThreeSourceGameState(video.currentTime, now);
+  }
   if (!timeline.completed && elapsed >= duration && video.ended) {
     timeline.completed = true;
     updateLevelThreeSourceGameState(duration, now);
     video.pause();
+    syncLevelThreeSourceAudio(duration, false);
+    audio.setSourceMixMode(false);
   } else if (!timeline.completed && video.paused) {
     void video.play().catch(() => {});
   }
@@ -3278,6 +3330,9 @@ function onPointerDown(event) {
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   if (state.game.level === 1) audio.setSourceMixMode(true);
+  if (state.game.level === 3 && bucket.id === 'purple' && state.game.moves === 0) {
+    audio.setSourceMixMode(true);
+  }
   if (state.game.level === 2 && !state.levelTwoSourceTimeline) {
     // A muted play request inside this trusted pointer gesture unlocks the
     // original mixed track before the first valid red dock starts its timeline.
@@ -3400,6 +3455,8 @@ function advanceToNextLevel() {
   if (state.game.level === 3) {
     levelThreeSourceGameplayVideo.preload = 'auto';
     levelThreeSourceGameplayVideo.load();
+    levelThreeSourceAudio.preload = 'auto';
+    levelThreeSourceAudio.load();
   }
   state.hammerMode = false;
   state.ufoMode = false;
@@ -3616,6 +3673,8 @@ function onPointerUp(event) {
   const point = mapPointer(event);
   const bucket = getBucket(state.game, state.game.activeBucketId);
   let acceptedLevelThreeSource = false;
+  const reservedLevelThreeSourceMix = bucket && state.game.level === 3
+    && bucket.id === 'purple' && state.game.moves === 0;
   if (bucket && state.game.level === 3 && !state.levelThreeSourceTimeline
       && bucket.id === 'purple' && state.game.moves === 0) {
     const dockedAtSourcePosition = Math.abs(bucket.x - 447) <= 18 && Math.abs(bucket.y - 480) <= 18;
@@ -3633,6 +3692,7 @@ function onPointerUp(event) {
       }
     }
   }
+  if (reservedLevelThreeSourceMix && !acceptedLevelThreeSource) audio.setSourceMixMode(false);
   if (bucket && state.dragDistance > 5) {
     const levelTwoDocked = state.game.level === 2 && dockLevelTwoBucket(bucket, state.dragStartedAt);
     if (acceptedLevelThreeSource) {
