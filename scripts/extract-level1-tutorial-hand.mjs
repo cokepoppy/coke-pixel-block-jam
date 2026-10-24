@@ -17,15 +17,14 @@ await mkdir(path.dirname(outputPath), { recursive: true });
 await mkdir(path.dirname(atlasOutputPath), { recursive: true });
 const result = spawnSync('ffmpeg', [
   '-hide_banner', '-loglevel', 'warning',
-  // Frame 26 (source time 2.733 s) is the first frame where the yellow tray
-  // starts rising. Keep frames 0–25 so the idle tutorial loop contains only
-  // the hand gesture and never moves the tray underneath it.
-  '-ss', '2.3', '-i', sourceVideo,
+  // Level 1 first appears at 1.783 s. Preserve the complete hand gesture
+  // through frame 56 at 2.717 s; frame 57 (2.733 s) begins the yellow-tray lift.
+  '-ss', '1.783333', '-i', sourceVideo,
   '-map', '0:v:0', '-an',
   // Keep the crop even-width for browser-friendly H.264 4:2:0 decoding; the
   // Canvas panel compositor maps the one extra source column to its 563 px box.
   '-vf', 'scale=597:1296:flags=lanczos:in_range=pc:out_range=pc,crop=564:756:17:226',
-  '-r', '60', '-fps_mode', 'cfr', '-frames:v', '26',
+  '-r', '60', '-fps_mode', 'cfr', '-frames:v', '57',
   '-c:v', 'libx264', '-preset', 'slow', '-crf', '0', '-pix_fmt', 'yuv420p',
   '-color_range', 'pc', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
   '-movflags', '+faststart', '-y', outputPath,
@@ -38,8 +37,8 @@ const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'level1-tutorial
 try {
   const frameExtraction = spawnSync('ffmpeg', [
     '-hide_banner', '-loglevel', 'warning', '-i', sourceVideo,
-    '-vf', "select='between(t,2.3,2.716667)',scale=597:1296:flags=lanczos:in_range=pc:out_range=pc,crop=563:756:17:226",
-    '-fps_mode', 'passthrough', '-frames:v', '26', '-start_number', '0', '-compression_level', '4', '-y',
+    '-vf', "select='between(t,1.783333,2.717)',scale=597:1296:flags=lanczos:in_range=pc:out_range=pc,crop=563:756:17:226",
+    '-fps_mode', 'passthrough', '-frames:v', '57', '-start_number', '0', '-compression_level', '4', '-y',
     path.join(temporaryDirectory, 'frame-%02d.png'),
   ], { stdio: 'inherit' });
   if (frameExtraction.error) throw frameExtraction.error;
@@ -50,8 +49,8 @@ try {
   const frameFiles = (await readdir(temporaryDirectory))
     .filter((file) => /^frame-\d{2}\.png$/u.test(file))
     .sort();
-  if (frameFiles.length !== 26) {
-    throw new Error(`Expected 26 source tutorial frames but extracted ${frameFiles.length}.`);
+  if (frameFiles.length !== 57) {
+    throw new Error(`Expected 57 source tutorial frames but extracted ${frameFiles.length}.`);
   }
 
   const columns = 5;
@@ -73,5 +72,5 @@ try {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }
 
-console.log(`Saved the 26-frame Level 1 tutorial timing clip to ${outputPath}.`);
+console.log(`Saved the 57-frame Level 1 opening gesture clip to ${outputPath}.`);
 console.log(`Saved the lossless 563x756 source-frame atlas to ${atlasOutputPath}.`);

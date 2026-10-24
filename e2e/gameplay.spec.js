@@ -731,8 +731,8 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
       && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
   ))).toBeTruthy();
   const duration = await tutorialVideo.evaluate((video) => video.duration);
-  expect(duration, 'the tutorial clip must end before the source begins lifting the yellow tray').toBeLessThanOrEqual(26 / 60 + 0.002);
-  expect(duration, 'the one-shot tutorial must retain the full hand-only movement').toBeGreaterThan(25 / 60 - 0.002);
+  expect(duration, 'the tutorial clip must end before the source begins lifting the yellow tray').toBeLessThanOrEqual(57 / 60 + 0.002);
+  expect(duration, 'the one-shot tutorial must retain the full Level 1 entry gesture').toBeGreaterThan(56 / 60 - 0.002);
 
   const captureFrame = async (frameIndex, label) => {
     const sample = await page.evaluate(async (index) => {
@@ -793,6 +793,7 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
         Math.round(rect.width * ratio), Math.round(rect.height * ratio),
       );
       const yellowRect = { left: 17 + 150, top: 226 + 555, width: 270, height: 135 };
+      const yellowStableRect = { left: 180, top: 886, width: 235, height: 72 };
       const handRect = { left: 17 + 260, top: 226 + 320, width: 190, height: 210 };
       const sampleRegion = (rect) => {
         const actual = read(gameContext, rect);
@@ -810,6 +811,7 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
       return {
         time: video.currentTime,
         yellow: sampleRegion(yellowRect),
+        yellowStable: sampleRegion(yellowStableRect),
         hand: sampleRegion(handRect),
       };
     }, frameIndex);
@@ -817,11 +819,11 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
     return sample;
   };
 
-  // Frames 0, 15, and 25 span the original hand gesture.
+  // Sample the opening, midpoint, and final frame of the full Level 1 entry gesture.
   const frames = [
     await captureFrame(0, 'frame-00'),
-    await captureFrame(15, 'frame-15'),
-    await captureFrame(25, 'frame-25'),
+    await captureFrame(28, 'frame-28'),
+    await captureFrame(56, 'frame-56'),
   ];
   const compareRegion = (before, after, label) => {
     const beforePixels = Buffer.from(before, 'base64');
@@ -840,10 +842,10 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
     expect(compareRegion(frame.yellow.actual, frame.yellow.reference, frame.yellow), `frame ${index} yellow tray must match its source video frame`).toBe(0);
   }
   const handMotion = compareRegion(frames[0].hand.actual, frames[1].hand.actual, frames[0].hand);
-  expect(handMotion, 'the original hand gesture must visibly advance between source frames 0 and 15').toBeGreaterThan(1_000);
+  expect(handMotion, 'the original hand gesture must visibly advance between source frames 0 and 28').toBeGreaterThan(1_000);
   for (const [index, frame] of frames.slice(1).entries()) {
-    const trayMotion = compareRegion(frames[0].yellow.actual, frame.yellow.actual, frames[0].yellow);
-    expect(trayMotion, `yellow tray must remain pixel-stable at source frame ${[15, 25, 0][index]}`).toBe(0);
+    const trayMotion = compareRegion(frames[0].yellowStable.actual, frame.yellowStable.actual, frames[0].yellowStable);
+    expect(trayMotion, `yellow tray body outside the hand path must remain stable at source frame ${[28, 56][index]}`).toBe(0);
   }
 
   await expect(tutorialVideo).toHaveJSProperty('loop', false);
@@ -853,7 +855,7 @@ test('Level 1 教程逐帧对齐原片，单次手势结束后停在末帧', asy
     video.currentTime = 0;
   }));
   await tutorialVideo.evaluate((video) => video.play());
-  await expect.poll(() => tutorialVideo.evaluate((video) => video.ended && video.paused), { timeout: 1_500 }).toBeTruthy();
+  await expect.poll(() => tutorialVideo.evaluate((video) => video.ended && video.paused), { timeout: 3_000 }).toBeTruthy();
   const endedTrayHashes = [];
   for (let sample = 0; sample < 5; sample += 1) {
     endedTrayHashes.push(await page.evaluate(() => {
@@ -957,13 +959,13 @@ test('Level 1 冷启动手势自然播放一次后停住，黄色槽不闪回', 
   expect(playback.playRequests, 'the cold-start tutorial should request playback only once').toBe(1);
   expect(playback.endedEvents, 'the one-shot gesture should emit a single ended event').toBe(1);
   expect(backwardsFrames, 'the tutorial video must not jump back to its first frame').toBe(0);
-  expect(Math.max(...times), 'natural playback should reach the 26-frame source endpoint').toBeGreaterThanOrEqual(25 / 60 - 0.002);
+  expect(Math.max(...times), 'natural playback should reach the 57-frame source endpoint').toBeGreaterThanOrEqual(56 / 60 - 0.002);
   expect(endedSamples.length, 'keep sampling the panel after natural playback ends').toBeGreaterThanOrEqual(12);
   expect(new Set(endedSamples.slice(-8).map(({ hash }) => hash)).size,
     'the yellow slot and its surrounding panel must remain pixel-stable after the hand stops').toBe(1);
 });
 
-test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮挡时点一致', async ({ page }, testInfo) => {
+test('Level 1 开局57帧逐帧匹配原片，手势移动时黄色槽保持稳定', async ({ page }, testInfo) => {
   const tutorialVideo = page.locator('#level-one-tutorial-video');
   await expect.poll(() => tutorialVideo.evaluate((video) => (
     video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -987,7 +989,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
     const panelContext = panel.getContext('2d');
     panelContext.imageSmoothingEnabled = false;
     const yellowSourceRect = { left: 157, top: 738, width: 285, height: 184 };
-    const yellowFullRect = { left: 157, top: 738, width: 285, height: 260 };
+    const yellowStableRect = { left: 180, top: 886, width: 235, height: 72 };
     const yellowBadgeRect = { left: 322, top: 738, width: 120, height: 38 };
     const handRect = { left: 277, top: 546, width: 190, height: 210 };
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
@@ -1035,12 +1037,12 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
     };
 
     const frames = [];
-    let firstYellowFull;
+    let firstYellowStable;
     let firstHand;
     panelContext.drawImage(
       atlas,
-      (13 % 5) * 563,
-      Math.floor(13 / 5) * 756,
+      (56 % 5) * 563,
+      Math.floor(56 / 5) * 756,
       563,
       756,
       0,
@@ -1051,7 +1053,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
     referenceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
     referenceContext.drawImage(panel, 17, 226);
     const clearYellowBadge = read(referenceContext, yellowBadgeRect);
-    for (let frameIndex = 0; frameIndex < 26; frameIndex += 1) {
+    for (let frameIndex = 0; frameIndex < 57; frameIndex += 1) {
       const targetTime = (frameIndex + 0.5) / 60;
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error(`Tutorial seek to frame ${frameIndex} timed out`)), 3_000);
@@ -1080,17 +1082,15 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
       referenceContext.drawImage(panel, 17, 226);
       const actualYellowSource = read(gameContext, yellowSourceRect);
       const expectedYellowSource = read(referenceContext, yellowSourceRect);
-      const actualYellowFull = read(gameContext, yellowFullRect);
+      const actualYellowStable = read(gameContext, yellowStableRect);
       const actualYellowBadge = read(gameContext, yellowBadgeRect);
       const actualHand = read(gameContext, handRect);
       const expectedHand = read(referenceContext, handRect);
       const yellowFrameMatch = compare(actualYellowSource, expectedYellowSource, yellowSourceRect.width);
       const handFrameMatch = compare(actualHand, expectedHand, handRect.width);
-      if (!firstYellowFull) firstYellowFull = actualYellowFull.slice();
+      if (!firstYellowStable) firstYellowStable = actualYellowStable.slice();
       if (!firstHand) firstHand = actualHand.slice();
-      const yellowStability = compare(actualYellowFull, firstYellowFull, yellowFullRect.width, [
-        { left: 164, top: 0, right: 285, bottom: 77 },
-      ]);
+      const yellowStability = compare(actualYellowStable, firstYellowStable, yellowStableRect.width);
       frames.push({
         frameIndex,
         sourceTime: video.currentTime,
@@ -1101,24 +1101,27 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
         handMotionFromFirstFrame: compare(actualHand, firstHand, handRect.width).exactDifferentPixels,
       });
     }
-    return { sourceRange: '00:02.300–00:02.717, 60 fps', frames };
+    return { sourceRange: '00:01.783–00:02.717, 60 fps', frames };
   });
 
-  expect(alignment.frames).toHaveLength(26);
+  expect(alignment.frames).toHaveLength(57);
   expect(alignment.frames.every(({ yellowFrameMatch }) => yellowFrameMatch.visibleDifferentPixels === 0),
     'each tutorial yellow-tray frame must visually match its same-time source frame').toBeTruthy();
   expect(alignment.frames.every(({ handFrameMatch }) => handFrameMatch.visibleDifferentPixels === 0),
     'each tutorial hand frame must visually match its same-time source frame').toBeTruthy();
-  expect(alignment.frames.every(({ yellowChangeFromFirstFrame }) => yellowChangeFromFirstFrame.visibleDifferentPixels === 0),
-    'the yellow slot geometry outside the source hand occlusion must remain visually stable across every tutorial frame').toBeTruthy();
+  const maxLowerYellowVariance = Math.max(...alignment.frames.map(({ yellowChangeFromFirstFrame }) => (
+    yellowChangeFromFirstFrame.visibleDifferentPixels
+  )));
+  expect(maxLowerYellowVariance,
+    'the lower yellow-slot body outside the source hand path must remain pixel-stable').toBe(0);
   expect(alignment.frames.filter(({ badgeChangeFromClearFrame }) => badgeChangeFromClearFrame.visibleDifferentPixels > 0).length,
     'the source hand should briefly cover the yellow 0% badge during the recorded tutorial').toBeGreaterThan(0);
-  expect(alignment.frames[15].handMotionFromFirstFrame, 'the source hand should move during the one-shot tutorial gesture')
+  expect(alignment.frames[28].handMotionFromFirstFrame, 'the source hand should move during the one-shot opening gesture')
     .toBeGreaterThan(1_000);
 
   const summary = {
     sourceRange: alignment.sourceRange,
-    yellowHandOcclusionMask: { left: 164, top: 0, right: 285, bottom: 77, reason: 'the source hand crosses the yellow badge and upper-right rim' },
+    yellowStabilityRegion: { left: 180, top: 886, width: 235, height: 72, reason: 'lower cavity and side rails stay outside the hand path and bottom fade' },
     frameCount: alignment.frames.length,
     visibleHandMismatches: alignment.frames.filter(({ handFrameMatch }) => handFrameMatch.visibleDifferentPixels > 0).length,
     visibleYellowMismatches: alignment.frames.filter(({ yellowFrameMatch }) => yellowFrameMatch.visibleDifferentPixels > 0).length,
@@ -1127,7 +1130,7 @@ test('Level 1 教程26帧逐帧匹配原片，黄色槽主体稳定且标牌遮�
     yellowBadgeOccludedFrames: alignment.frames.filter(({ badgeChangeFromClearFrame }) => badgeChangeFromClearFrame.visibleDifferentPixels > 0).map(({ frameIndex }) => frameIndex),
     frames: alignment.frames,
   };
-  await testInfo.attach('level1-tutorial-26-frame-alignment.json', {
+  await testInfo.attach('level1-opening-57-frame-alignment.json', {
     body: Buffer.from(JSON.stringify(summary, null, 2)),
     contentType: 'application/json',
   });

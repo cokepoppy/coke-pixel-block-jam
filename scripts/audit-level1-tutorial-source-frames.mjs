@@ -27,16 +27,17 @@ const regions = {
 await Promise.all([sourceDirectory, browserDirectory, diffDirectory].map((directory) => mkdir(directory, { recursive: true })));
 
 const sourcePattern = path.join(sourceDirectory, 'frame-%02d.png');
+const sourceFrameCount = 57;
 const extraction = spawnSync('ffmpeg', [
   '-hide_banner', '-loglevel', 'info', '-i', sourceVideo,
-  '-vf', "select='between(t,2.3,2.716667)',scale=597:1296:flags=lanczos:in_range=pc:out_range=pc,crop=563:756:17:226,showinfo",
-  '-fps_mode', 'passthrough', '-frames:v', '26', '-start_number', '0', '-compression_level', '4', '-y', sourcePattern,
+  '-vf', "select='between(t,1.783333,2.717)',scale=597:1296:flags=lanczos:in_range=pc:out_range=pc,crop=563:756:17:226,showinfo",
+  '-fps_mode', 'passthrough', '-frames:v', String(sourceFrameCount), '-start_number', '0', '-compression_level', '4', '-y', sourcePattern,
 ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 if (extraction.error) throw extraction.error;
 if (extraction.status !== 0) throw new Error(`ffmpeg failed: ${extraction.stderr}`);
 const sourceTimestamps = [...extraction.stderr.matchAll(/pts_time:([0-9.]+)/gu)].map((match) => Number(match[1]));
-if (sourceTimestamps.length !== 26) {
-  throw new Error(`Expected 26 original source timestamps, found ${sourceTimestamps.length}.`);
+if (sourceTimestamps.length !== sourceFrameCount) {
+  throw new Error(`Expected ${sourceFrameCount} original source timestamps, found ${sourceTimestamps.length}.`);
 }
 
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
@@ -50,7 +51,7 @@ try {
   }, null, { timeout: 15_000 });
 
   const frames = [];
-  for (let index = 0; index < 26; index += 1) {
+  for (let index = 0; index < sourceFrameCount; index += 1) {
     await page.evaluate(async (frameIndex) => {
       const video = document.querySelector('#level-one-tutorial-video');
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
