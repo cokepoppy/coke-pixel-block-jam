@@ -2591,14 +2591,34 @@ test('Level 1 切换颜色源片段时保留已显示的墙面帧', async ({ pag
   expect(changedPixels, 'the visible source wall should stay on its last presented frame during the seek').toBeLessThanOrEqual(25);
 });
 
-test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async ({ page }) => {
+test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async ({ page }, testInfo) => {
   test.setTimeout(30_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.evaluate(() => {
     const canvas = document.querySelector('#game-canvas');
     const status = document.querySelector('#live-status');
-    window.__levelOnePlaythroughTrace = { statuses: [], pointer: [] };
+    window.__levelOnePlaythroughTrace = { statuses: [], pointer: [], labels: [], percentFrame: null };
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function recordLevelOneProgressLabel(text, x, y, ...rest) {
+      if (this.canvas?.id === 'game-canvas' && /^\d+%$/u.test(String(text))) {
+        window.__levelOnePlaythroughTrace.labels.push({ at: performance.now(), text: String(text), x, y });
+      }
+      const result = originalFillText.call(this, text, x, y, ...rest);
+      if (this.canvas?.id === 'game-canvas' && String(text) === '34%' && x > 500
+          && window.__levelOnePlaythroughTrace.percentFrame === null) {
+        const canvas = this.canvas;
+        queueMicrotask(() => {
+          if (window.__levelOnePlaythroughTrace.percentFrame !== null) return;
+          window.__levelOnePlaythroughTrace.percentFrame = {
+            at: performance.now(),
+            sourceTime: document.querySelector('#level-one-source-video')?.currentTime ?? null,
+            dataUrl: canvas.toDataURL('image/png'),
+          };
+        });
+      }
+      return result;
+    };
     const recordStatus = () => window.__levelOnePlaythroughTrace.statuses.push({
       at: performance.now(),
       text: status?.textContent ?? '',
@@ -2636,6 +2656,16 @@ test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async 
   await expect.poll(() => page.evaluate(() => window.__levelOnePlaythroughTrace.statuses.some(({ text }) => (
     text.includes('红色 像素块，进度 34%')
   ))), { timeout: 5_000, message: 'the red sweep should reach the original 34% milestone' }).toBeTruthy();
+  const redLabelProbe = await page.evaluate(() => {
+    const milestone = window.__levelOnePlaythroughTrace.statuses.find(({ text }) => text.includes('红色 像素块，进度 34%'));
+    const labels = window.__levelOnePlaythroughTrace.labels.filter(({ x }) => x > 500);
+    const nearest = labels.reduce((best, label) => (
+      !best || Math.abs(label.at - milestone.at) < Math.abs(best.at - milestone.at) ? label : best
+    ), null);
+    return { milestoneAt: milestone?.at ?? null, label: nearest };
+  });
+  console.log(`Level 1 red 34% rendered label: ${JSON.stringify(redLabelProbe)}`);
+  expect(redLabelProbe.label?.text, 'the red tray label near the 34% status milestone should render 34%').toBe('34%');
   await expect.poll(() => page.evaluate(() => window.__levelOnePlaythroughTrace.statuses.some(({ text }) => (
     text.includes('红色 像素块，进度 100%')
   ))), { timeout: 5_000 }).toBeTruthy();
@@ -2644,6 +2674,13 @@ test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async 
   await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-green', '0');
 
   const trace = await page.evaluate(() => window.__levelOnePlaythroughTrace);
+  expect(trace.percentFrame?.dataUrl, 'the 34% progress label should be captured in the same canvas paint').toMatch(/^data:image\/png;base64,/u);
+  const exactProgressCanvas = Buffer.from(trace.percentFrame.dataUrl.split(',')[1], 'base64');
+  await writeFile(testInfo.outputPath('level1-red-34-exact-canvas.png'), exactProgressCanvas);
+  await testInfo.attach('level1-red-34-exact-canvas.png', {
+    body: exactProgressCanvas,
+    contentType: 'image/png',
+  });
   const downs = trace.pointer.filter(({ type }) => type === 'pointerdown').map(({ color, at }) => ({ color, at }));
   expect(downs.map(({ color }) => color), 'the recorded pointer sequence should match yellow, green, red').toEqual(['yellow', 'green', 'red']);
   const green100 = trace.statuses.find(({ text }) => text.includes('绿色 像素块，进度 100%'));
