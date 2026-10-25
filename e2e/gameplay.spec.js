@@ -1723,7 +1723,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   const redProgress = await page.evaluate(() => window.__levelOneColorProgressLog
     .filter((entry) => entry.includes('红色 像素块'))
     .map((entry) => Number(entry.match(/进度 (\d+)%/)?.[1] ?? 0)));
-  for (const [minimum, maximum] of [[3, 6], [69, 72], [86, 96], [100, 100]]) {
+  for (const [minimum, maximum] of [[34, 34], [64, 64], [77, 77], [92, 92], [100, 100]]) {
     expect(redProgress.some((progress) => progress >= minimum && progress <= maximum), `missing red sweep range ${minimum}-${maximum}%`)
       .toBeTruthy();
   }
@@ -2561,10 +2561,103 @@ test('延迟完成 Web Audio 解锁后仍播放首次按钮音效', async ({ pag
   await page.getByRole('dialog', { name: '游戏设置' }).getByRole('button', { name: '继续游戏' }).click();
 });
 
-test('拖动三色收集槽清空 Level 1 并播放转场进入 Level 2', async ({ page }) => {
+test('Level 1 切换颜色源片段时保留已显示的墙面帧', async ({ page }) => {
+  await drag(page, 298, 866, 298, 620);
+  await expect(page.locator('#live-status')).toContainText('黄色 像素块，进度 100%', { timeout: 5_000 });
+
+  const beforeScreenshot = await page.screenshot();
+  const greenStart = await pointOnCanvas(page, 111, 866);
+  await page.evaluate(() => {
+    const video = document.querySelector('#level-one-source-video');
+    window.__levelOneNextSourceSeek = new Promise((resolve) => {
+      video.addEventListener('seeking', () => resolve({ readyState: video.readyState, currentTime: video.currentTime }), { once: true });
+    });
+  });
+  await page.mouse.move(greenStart.x, greenStart.y);
+  await page.mouse.down();
+  const seekEvent = await page.evaluate(() => window.__levelOneNextSourceSeek);
+  const duringSeekScreenshot = await page.screenshot();
+  await page.mouse.up();
+
+  const crop = { left: 61, top: 269, width: 474, height: 219 };
+  const before = await sharp(beforeScreenshot).extract(crop).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const during = await sharp(duringSeekScreenshot).extract(crop).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const changedPixels = pixelmatch(before.data, during.data, Buffer.alloc(before.data.length), before.info.width, before.info.height, {
+    threshold: 0.12,
+    includeAA: false,
+  });
+  console.log(`Level 1 source seek retained wall: ${JSON.stringify({ ...seekEvent, changedPixels })}`);
+  expect(seekEvent.readyState, 'the capture should occur while the next source segment is seeking').toBeLessThan(2);
+  expect(changedPixels, 'the visible source wall should stay on its last presented frame during the seek').toBeLessThanOrEqual(25);
+});
+
+test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async ({ page }) => {
   test.setTimeout(30_000);
-  await completeLevelOne(page, true);
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.evaluate(() => {
+    const canvas = document.querySelector('#game-canvas');
+    const status = document.querySelector('#live-status');
+    window.__levelOnePlaythroughTrace = { statuses: [], pointer: [] };
+    const recordStatus = () => window.__levelOnePlaythroughTrace.statuses.push({
+      at: performance.now(),
+      text: status?.textContent ?? '',
+      remainingCells: canvas?.dataset.levelOneRemainingCells ?? null,
+      sourceTime: document.querySelector('#level-one-source-video')?.currentTime ?? null,
+    });
+    recordStatus();
+    new MutationObserver(recordStatus).observe(status, { childList: true, characterData: true, subtree: true });
+    for (const type of ['pointerdown', 'pointerup']) {
+      document.addEventListener(type, (event) => window.__levelOnePlaythroughTrace.pointer.push({
+        type,
+        at: performance.now(),
+        x: event.clientX,
+        y: event.clientY,
+        color: Math.abs(event.clientX - 298) < 70 ? 'yellow'
+          : Math.abs(event.clientX - 111) < 70 ? 'green'
+            : Math.abs(event.clientX - 485) < 70 ? 'red' : 'unknown',
+      }), true);
+    }
+  });
+
+  await drag(page, 298, 866, 298, 620);
+  await expect(page.locator('#live-status')).toContainText('黄色 像素块，进度 100%', { timeout: 5_000 });
+
+  await page.waitForTimeout(250);
+  await drag(page, 111, 866, 111, 620);
+  await expect.poll(() => page.locator('#game-canvas').getAttribute('data-level-one-yellow-exit-progress'))
+    .toBe('1');
+  // Start the red tray immediately after releasing green. The original lifts
+  // red while green is still clearing; waiting for green 100% hides that race.
+  await drag(page, 485, 866, 485, 620);
+  await expect.poll(() => page.evaluate(() => window.__levelOnePlaythroughTrace.statuses.some(({ text }) => (
+    text.includes('绿色 像素块，进度 100%')
+  ))), { timeout: 5_000, message: 'green must finish while the red drag is already in progress' }).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => window.__levelOnePlaythroughTrace.statuses.some(({ text }) => (
+    text.includes('红色 像素块，进度 34%')
+  ))), { timeout: 5_000, message: 'the red sweep should reach the original 34% milestone' }).toBeTruthy();
+  await expect.poll(() => page.evaluate(() => window.__levelOnePlaythroughTrace.statuses.some(({ text }) => (
+    text.includes('红色 像素块，进度 100%')
+  ))), { timeout: 5_000 }).toBeTruthy();
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-one-remaining-cells', '0');
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-green', '0');
+
+  const trace = await page.evaluate(() => window.__levelOnePlaythroughTrace);
+  const downs = trace.pointer.filter(({ type }) => type === 'pointerdown').map(({ color, at }) => ({ color, at }));
+  expect(downs.map(({ color }) => color), 'the recorded pointer sequence should match yellow, green, red').toEqual(['yellow', 'green', 'red']);
+  const green100 = trace.statuses.find(({ text }) => text.includes('绿色 像素块，进度 100%'));
+  const red34 = trace.statuses.find(({ text }) => text.includes('红色 像素块，进度 34%'));
+  const red100 = trace.statuses.find(({ text }) => text.includes('红色 像素块，进度 100%'));
+  console.log(`Level 1 overlap timing: ${JSON.stringify({ downs, green100, red34, red100, pointer: trace.pointer })}`);
+  expect(green100.at, 'green should reach 100% after the red pointer-down').toBeGreaterThan(downs[2].at);
+  expect(red34.at, 'red progress should begin after the red pointer-down').toBeGreaterThan(downs[2].at);
+  expect(Math.abs(green100.at - red34.at), 'source reaches green 100% and red 34% together').toBeLessThanOrEqual(100);
+  expect(Math.abs(green100.sourceTime - 4.0), `green 100% should align to source time 4.0s, got ${green100.sourceTime}s`).toBeLessThanOrEqual(0.1);
+  expect(Math.abs(red34.sourceTime - 4.0), `red 34% should align to source time 4.0s, got ${red34.sourceTime}s`).toBeLessThanOrEqual(0.1);
+  expect(red100.at).toBeGreaterThan(red34.at);
+  expect(pageErrors, 'the recorded three-color playthrough should not throw browser errors').toEqual([]);
+  console.log(`Level 1 overlapping playthrough trace: ${JSON.stringify({ finalStatus: trace.statuses.at(-1), errors: pageErrors })}`);
 });
 
 test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', async ({ page }, testInfo) => {

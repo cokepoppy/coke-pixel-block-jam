@@ -1573,6 +1573,13 @@ function drawBucket(bucket, lockedPreview = false) {
     : [{ x: 0, y: 0, width, height }];
   const composite = Boolean(bucket.segments?.length);
   ctx.save();
+  if (state.game.level === 1 && bucket.levelOneExitProgress > 0) {
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    ctx.translate(centerX, centerY + (bucket.levelOneExitDrop ?? 0));
+    ctx.scale(bucket.levelOneExitScale ?? 1, bucket.levelOneExitScale ?? 1);
+    ctx.translate(-centerX, -centerY);
+  }
   ctx.translate(0, y);
   ctx.scale(1, 1);
   ctx.translate(0, -y);
@@ -2720,7 +2727,10 @@ function advanceLevelTwoCollectionProgress(now) {
 const LEVEL_ONE_SOURCE_SEGMENTS = {
   yellow: { start: 0, end: 2.0 },
   green: { start: 2.5, end: 4.0 },
-  red: { start: 4.0, end: 5.95 },
+  // Red reaches the wall after its tray has risen while green is clearing.
+  // At this source frame green is nearly full and red is still at 0%; about
+  // 217 ms later both match the source's green 100% / red 34% frame.
+  red: { start: 3.783, end: 5.95 },
 };
 
 // The source recording reaches the wall about half a second after the yellow
@@ -2731,7 +2741,7 @@ const LEVEL_ONE_SOURCE_DRAG_LEADS_MS = { yellow: 500, green: 500, red: 0 };
 const LEVEL_ONE_PROGRESS_STOPS = {
   yellow: [[0.06, 1_000], [0.36, 1_200], [0.63, 1_400], [0.99, 1_700], [1, 2_000]],
   green: [[0.25, 750], [0.48, 900], [0.71, 1_050], [0.85, 1_200], [0.99, 1_350], [1, 1_500]],
-  red: [[0.03, 0], [0.06, 200], [0.69, 233], [0.72, 250], [0.77, 283], [0.82, 333], [0.86, 367], [0.92, 383], [0.96, 450], [1, 550]],
+  red: [[0.34, 217], [0.64, 417], [0.77, 517], [0.92, 717], [1, 917]],
 };
 
 // Yellow rows clear from top to bottom in the source recording. These times
@@ -2824,6 +2834,10 @@ function requestLevelOneSourceVideoPlayback(timeline) {
 function prepareLevelOneSourceSegment(color) {
   const segment = levelOneSourceSegment(color);
   if (!segment || levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_METADATA) return;
+  // A new tray can be lifted while another color's source animation is still
+  // playing. Keep that timeline intact until the new tray actually reaches
+  // the wall; seeking on pointer-down would skip the in-between source frames.
+  if (state.levelOneSourceTimeline && !state.levelOneSourceTimeline.completed) return;
   const leadMs = LEVEL_ONE_SOURCE_DRAG_LEADS_MS[color] ?? 0;
   const targetTime = Math.min(segment.end, segment.start + leadMs / 1_000);
   if (Math.abs(levelOneSourceVideo.currentTime - targetTime) < 0.005) return;
@@ -3057,7 +3071,7 @@ function advanceLevelOneSweep(now) {
     const milestones = bucket.color === 'yellow'
       ? [6, 36, 63, 99, 100]
       : bucket.color === 'green' ? [25, 48, 71, 85, 99, 100]
-        : bucket.color === 'red' ? [3, 6, 69, 72, 77, 82, 86, 92, 96, 100] : null;
+        : bucket.color === 'red' ? [34, 64, 77, 92, 100] : null;
     const sourceProgress = milestones?.includes(progress)
       ? progress
       : milestones?.find((milestone) => Math.abs(milestone - progress) <= 1);
@@ -3331,7 +3345,8 @@ function drawLevelOneSourcePanel(source) {
 }
 
 function drawLevelOneSourceActionPanel() {
-  if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  if (levelOneSourcePresentedFrameTime === null
+      && levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const source = levelOneSourcePresentedFrameTime === null
     ? levelOneSourceVideo
     : levelOneSourcePresentedFrameCanvas;
@@ -3341,7 +3356,8 @@ function drawLevelOneSourceActionPanel() {
 }
 
 function drawLevelOneSourceBoardFrame() {
-  if (levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+  if (levelOneSourcePresentedFrameTime === null
+      && levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const source = levelOneSourcePresentedFrameTime === null
     ? levelOneSourceVideo
     : levelOneSourcePresentedFrameCanvas;
@@ -3559,7 +3575,11 @@ function drawScene(now) {
     && levelThreeOpeningPanelImage.complete
     && levelThreeOpeningPanelImage.naturalWidth > 0;
   const showSourceActionPanel = state.game.level === 1
-    && Boolean(state.levelOneSourceTimeline);
+    && Boolean(state.levelOneSourceTimeline)
+    && !state.levelOneSourceTimeline.completed;
+  const showLevelOneCompletedSourceFrame = state.game.level === 1
+    && Boolean(state.levelOneSourceTimeline?.completed)
+    && levelOneSourcePresentedFrameTime !== null;
   const showLevelOneBrandPrelude = showSourceActionPanel
     && state.levelOneSourceTimeline.color === 'red'
     && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -3608,6 +3628,15 @@ function drawScene(now) {
       drawParticles(now);
       drawLevelOneSourceBoardFrame();
     }
+  } else if (showLevelOneCompletedSourceFrame) {
+    // Keep the last displayed source board visible while the next color's
+    // source video seeks. The seek temporarily drops readyState, but the
+    // offscreen canvas still holds the last frame the player actually saw.
+    drawPixelWall();
+    drawPad();
+    drawBuckets();
+    drawParticles(now);
+    drawLevelOneSourceBoardFrame();
   } else if (showSourceOpeningPanel) {
     const tutorialPanelSource = !prefersReducedMotion.matches
       && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -4236,7 +4265,22 @@ function frame(now) {
   if (!document.hidden && !state.loading) updateClock(state.game, delta);
   for (const bucket of state.game.buckets) {
     const completionHoldMs = state.game.level === 2 && bucket.color === 'red' ? 700 : 480;
-    if (bucket.completeAt && state.game.activeBucketId !== bucket.id && now - bucket.completeAt > completionHoldMs) {
+    if (state.game.level === 1 && bucket.color === 'yellow' && bucket.completeAt
+        && state.game.activeBucketId !== bucket.id) {
+      // The source holds the full yellow tray briefly, then drops and shrinks
+      // it off screen before the green tray begins rising.
+      if (!bucket.levelOneExitStartedAt) bucket.levelOneExitStartedAt = now;
+      const holdMs = 140;
+      const exitDurationMs = 60;
+      const progress = Math.max(0, Math.min(1, (now - bucket.levelOneExitStartedAt - holdMs) / exitDurationMs));
+      const eased = progress * progress * (3 - 2 * progress);
+      bucket.levelOneExitProgress = progress;
+      bucket.levelOneExitDrop = 260 * eased;
+      bucket.levelOneExitScale = 1 - (0.45 * eased);
+      if (progress >= 1) bucket.visible = false;
+      canvas.dataset.levelOneYellowExitProgress = String(progress);
+    } else if (bucket.completeAt && state.game.activeBucketId !== bucket.id
+        && now - bucket.completeAt > completionHoldMs) {
       bucket.visible = false;
     }
   }
