@@ -3355,7 +3355,41 @@ function drawLevelOneSourceActionPanel() {
   drawLevelOneFadedPanel(source, width, height, width, LEVEL_ONE_ACTION_BLEND_START);
 }
 
-function drawLevelOneSourceBoardFrame() {
+function drawLevelOneLiveWallExcept(activeColor) {
+  const board = state.game.gridRect;
+  const columns = state.game.config.grid.cols ?? board.cols;
+  const paint = state.game.config.paint;
+  if (!board || !columns || typeof paint !== 'function') return;
+
+  const inactiveRanges = [];
+  let rangeStart = null;
+  for (let column = 0; column <= columns; column += 1) {
+    const targetBucketId = column < columns ? paint.call(state.game.config, column, 0)?.targetBucketId : null;
+    const inactive = column < columns && targetBucketId !== activeColor;
+    if (inactive && rangeStart === null) rangeStart = column;
+    if (!inactive && rangeStart !== null) {
+      inactiveRanges.push([rangeStart, column]);
+      rangeStart = null;
+    }
+  }
+  if (inactiveRanges.length === 0) return;
+
+  // The source recording contains more than one color moving at a time. Keep
+  // its authentic animation only for the dragged color; restore every other
+  // column from the live grid so unrelated pixels cannot fall or disappear.
+  ctx.save();
+  ctx.beginPath();
+  for (const [startColumn, endColumn] of inactiveRanges) {
+    const left = board.x + Math.round(startColumn * board.width / columns);
+    const right = board.x + Math.round(endColumn * board.width / columns);
+    ctx.rect(left, board.y, right - left, board.height);
+  }
+  ctx.clip();
+  drawPixelWall();
+  ctx.restore();
+}
+
+function drawLevelOneSourceBoardFrame(activeColor = state.levelOneSourceTimeline?.color) {
   if (levelOneSourcePresentedFrameTime === null
       && levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   const source = levelOneSourcePresentedFrameTime === null
@@ -3378,6 +3412,7 @@ function drawLevelOneSourceBoardFrame() {
   }
   ctx.drawImage(source, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
   ctx.restore();
+  if (activeColor) drawLevelOneLiveWallExcept(activeColor);
 }
 
 function drawLevelOneSourceFrameToCanvas() {

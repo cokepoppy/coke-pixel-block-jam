@@ -518,8 +518,8 @@ async function startLevelOneYellowFrameProbe(page) {
   });
 }
 
-async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
-  await page.evaluate(({ startTime: start, endTime: end }) => {
+async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime, activeColor) {
+  await page.evaluate(({ startTime: start, endTime: end, activeColor }) => {
     const source = document.querySelector('#level-one-source-video');
     const sourceImage = window.__levelOneSourcePresentedFrameCanvas ?? source;
     const game = document.querySelector('#game-canvas');
@@ -535,6 +535,7 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
       frames: [],
       events: [],
       done: false,
+      activeColor,
       initial: {
         currentTime: source.currentTime,
         paused: source.paused,
@@ -543,6 +544,12 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
       },
     };
     const seenFrames = new Set();
+    const activeColumnRanges = { green: [0, 9], yellow: [9, 28], red: [28, 37] };
+    const [activeColumnStart, activeColumnEnd] = activeColumnRanges[activeColor] ?? [0, 37];
+    // Leave a two-pixel guard around the source/live clip edge, where canvas
+    // clipping can produce partially covered antialiased pixels.
+    const activePixelStart = Math.round(activeColumnStart * 474 / 37) + (activeColumnStart ? 2 : 0);
+    const activePixelEnd = Math.round(activeColumnEnd * 474 / 37) - (activeColumnEnd < 37 ? 2 : 0);
     window.__levelOneSourceBoardFrameProbe = probe;
     let recording = !source.paused && !source.seeking;
     let reachedEnd = false;
@@ -582,6 +589,7 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
         for (let pixel = 0; pixel < 474 * 219; pixel += 1) {
           const x = pixel % 474;
           const y = Math.floor(pixel / 474);
+          if (x < activePixelStart || x >= activePixelEnd) continue;
           // The original phone recording's volume HUD overlaps this small
           // left-edge rectangle. The replica deliberately reveals clean game
           // pixels there, so exclude only that non-game recording overlay.
@@ -654,7 +662,7 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
       };
       probe.done = true;
     }, 5_000);
-  }, { startTime, endTime });
+  }, { startTime, endTime, activeColor });
 }
 
 async function completeLevelOne(page, assertTransition = false) {
@@ -1684,7 +1692,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
       .observe(status, { childList: true, characterData: true, subtree: true });
   });
 
-  await startLevelOneSourceBoardFrameProbe(page, 3.0, 4.0);
+  await startLevelOneSourceBoardFrameProbe(page, 3.0, 4.0, 'green');
   await drag(page, 111, 866, 111, 620);
   await expect.poll(() => page.evaluate(() => window.__levelOneColorProgressLog.some((entry) => (
     entry.includes('绿色 像素块，进度 25%')
@@ -1725,10 +1733,10 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   expect(greenFrameProbe.frames.length, 'compare at least 30 decoded green source frames to the rendered board').toBeGreaterThanOrEqual(30);
   expect(greenFrameProbe.frames[0].sourceTime, 'green source-frame checks should begin near the played segment start').toBeLessThan(3.1);
   expect(greenFrameProbe.frames.at(-1).sourceTime, 'green source-frame checks should cover the played segment end').toBeGreaterThan(3.9);
-  expect(greenFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every green source board frame should render without game-pixel changes; the source-only volume HUD area is masked')
+  expect(greenFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every green source frame should match inside the green column range; the source-only volume HUD area is masked')
     .toBeTruthy();
 
-  await startLevelOneSourceBoardFrameProbe(page, 4.0, 5.5);
+  await startLevelOneSourceBoardFrameProbe(page, 4.0, 5.5, 'red');
   await drag(page, 485, 866, 485, 620);
   await expect(page.locator('#live-status')).toContainText('红色 像素块，进度 100%', { timeout: 2_000 });
   await page.screenshot({ path: testInfo.outputPath('level1-red-100.png') });
@@ -1755,7 +1763,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   expect(redFrameProbe.frames.length, 'compare at least 40 decoded red source frames to the rendered board').toBeGreaterThanOrEqual(40);
   expect(redFrameProbe.frames[0].sourceTime, 'red source-frame checks should begin near the played segment start').toBeLessThan(4.1);
   expect(redFrameProbe.frames.at(-1).sourceTime, 'red source-frame checks should cover the played segment before the brand transition').toBeGreaterThan(5.4);
-  expect(redFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every red source board frame should render without pixel changes')
+  expect(redFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every red source frame should match inside the red column range')
     .toBeTruthy();
 });
 
@@ -1786,10 +1794,22 @@ test('Level 1 只拖绿色槽时红色槽画面保持原位', async ({ page }, t
     threshold: 0.12,
     includeAA: false,
   });
+  const redWallCrop = { left: 422, top: 269, width: 113, height: 219 };
+  const beforeRedWall = await sharp(beforeRedLift).extract(redWallCrop).ensureAlpha().raw().toBuffer();
+  const duringRedWall = await sharp(duringGreen).extract(redWallCrop).ensureAlpha().raw().toBuffer();
+  const redWallDifferentPixels = pixelmatch(
+    beforeRedWall,
+    duringRedWall,
+    Buffer.alloc(beforeRedWall.length),
+    redWallCrop.width,
+    redWallCrop.height,
+    { threshold: 0.12, includeAA: false },
+  );
   await testInfo.attach('level1-green-before-red-lift.png', { body: beforeRedLift, contentType: 'image/png' });
   await testInfo.attach('level1-green-only-red-tray.png', { body: duringGreen, contentType: 'image/png' });
-  console.log(`Level 1 inactive red tray visual diff during green-only move: ${differentPixels} pixels at source ${sourceTimeBeforeRedLift.toFixed(3)}s -> ${sourceTimeDuringGreen.toFixed(3)}s`);
+  console.log(`Level 1 inactive red tray visual diff during green-only move: ${differentPixels} pixels; red wall diff: ${redWallDifferentPixels} pixels at source ${sourceTimeBeforeRedLift.toFixed(3)}s -> ${sourceTimeDuringGreen.toFixed(3)}s`);
   expect(differentPixels, 'the visible red tray must not replay its source-video lift while only green was dragged').toBe(0);
+  expect(redWallDifferentPixels, 'red wall pixels must remain in place while only green was dragged').toBe(0);
 });
 
 test('Level 1 绿黄红连续真实拖动各自只移动对应收集槽并能通关', async ({ page }) => {
