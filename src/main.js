@@ -1027,16 +1027,18 @@ function drawPixelWall() {
       ctx.restore();
 
       for (let row = 0; row < rows; row += 1) {
+        const py = y + Math.round(row * height / rows);
+        const cellBottom = y + Math.round((row + 1) * height / rows);
+        let emptyCellGradient = null;
         for (let column = 0; column < cols; column += 1) {
           const cell = state.game.grid[board.cellOffset + row * cols + column];
           if (cell && !cell.split) continue;
           const px = x + Math.round(column * width / cols);
-          const py = y + Math.round(row * height / rows);
           const cellRight = x + Math.round((column + 1) * width / cols);
-          const cellBottom = y + Math.round((row + 1) * height / rows);
           const cellWidth = cellRight - px;
           const cellHeight = cellBottom - py;
-          ctx.fillStyle = gradient(0, py, 0, cellBottom, [[0, '#438ed6'], [1, '#3784cc']]);
+          emptyCellGradient ??= gradient(0, py, 0, cellBottom, [[0, '#438ed6'], [1, '#3784cc']]);
+          ctx.fillStyle = emptyCellGradient;
           ctx.fillRect(px, py, cellWidth, cellHeight);
           if (!cell) continue;
           drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);

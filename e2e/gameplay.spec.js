@@ -195,6 +195,50 @@ async function installLevelOneMotionProbe(page) {
   });
 }
 
+async function installLevelOneFrameBudgetProbe(page) {
+  await page.addInitScript(() => {
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    const probe = window.__levelOneFrameBudgetProbe = { frames: [], sourceFrames: [], gradientCount: 0 };
+    const prototype = CanvasRenderingContext2D.prototype;
+    const originalGradient = prototype.createLinearGradient;
+    prototype.createLinearGradient = function createLinearGradient(...args) {
+      if (this.canvas?.id === 'game-canvas') probe.gradientCount += 1;
+      return originalGradient.apply(this, args);
+    };
+    window.requestAnimationFrame = (callback) => nativeRequestAnimationFrame((at) => {
+      const startedAt = performance.now();
+      const gradientsBefore = probe.gradientCount;
+      const result = callback(at);
+      if (callback.name === 'frame') {
+        const video = document.querySelector('#level-one-source-video');
+        probe.frames.push({
+          at,
+          sourceTime: video?.currentTime ?? -1,
+          sourcePlaying: Boolean(video && !video.paused && !video.seeking),
+          workMs: performance.now() - startedAt,
+          gradients: probe.gradientCount - gradientsBefore,
+        });
+      }
+      return result;
+    });
+    const watchSourceFrames = () => {
+      const video = document.querySelector('#level-one-source-video');
+      if (!video) {
+        requestAnimationFrame(watchSourceFrames);
+        return;
+      }
+      const recordSourceFrame = (at, metadata) => {
+        if (!video.paused && !video.seeking && metadata.mediaTime >= 3 && metadata.mediaTime < 4) {
+          probe.sourceFrames.push({ at, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames });
+        }
+        video.requestVideoFrameCallback(recordSourceFrame);
+      };
+      video.requestVideoFrameCallback(recordSourceFrame);
+    };
+    requestAnimationFrame(watchSourceFrames);
+  });
+}
+
 async function dragAt60Hz(page, fromX, fromY, toX, toY, durationMs) {
   const from = await pointOnCanvas(page, fromX, fromY);
   const to = await pointOnCanvas(page, toX, toY);
@@ -1765,6 +1809,62 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   expect(redFrameProbe.frames.at(-1).sourceTime, 'red source-frame checks should cover the played segment before the brand transition').toBeGreaterThan(5.4);
   expect(redFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every red source frame should match inside the red column range')
     .toBeTruthy();
+});
+
+test('Level 1 绿色掉落动画每帧复用空格渐变并保持 60 帧绘制节奏', async ({ page }, testInfo) => {
+  test.setTimeout(30_000);
+  await installLevelOneFrameBudgetProbe(page);
+  await page.goto('/?previewLevel=1');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('aria-label', '拖动收集槽收集彩色像素方块');
+
+  await drag(page, 298, 866, 298, 620);
+  await expect(page.locator('#live-status')).toContainText('黄色 像素块，进度 100%', { timeout: 5_000 });
+  await page.waitForFunction(() => {
+    const video = document.querySelector('#level-one-source-video');
+    return video?.paused && video.currentTime >= 1.95;
+  }, { timeout: 5_000 });
+  await page.waitForTimeout(250);
+
+  await drag(page, 111, 866, 111, 620);
+  await expect(page.locator('#live-status')).toContainText('绿色 像素块，进度 100%', { timeout: 5_000 });
+  const probe = await page.evaluate(() => window.__levelOneFrameBudgetProbe);
+  const sweepFrames = probe.frames.filter(({ sourceTime, sourcePlaying }) => (
+    sourcePlaying && sourceTime >= 3 && sourceTime < 4
+  ));
+  const videoFrames = probe.sourceFrames.filter(({ mediaTime }) => mediaTime >= 3 && mediaTime < 4);
+  const frameIntervals = sweepFrames.slice(1).map((frame, index) => frame.at - sweepFrames[index].at);
+  const videoIntervals = videoFrames.slice(1).map((frame, index) => frame.at - videoFrames[index].at);
+  const sourceFrameGaps = videoFrames.slice(1).map((frame, index) => frame.presentedFrames - videoFrames[index].presentedFrames);
+  const percentile = (values, ratio) => {
+    const sorted = [...values].sort((left, right) => left - right);
+    return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio))] ?? 0;
+  };
+  const report = {
+    sourceFrames: sweepFrames.length,
+    decodedVideoFrames: videoFrames.length,
+    frameIntervalP95Ms: Number(percentile(frameIntervals, 0.95).toFixed(2)),
+    frameIntervalMaxMs: Number(Math.max(0, ...frameIntervals).toFixed(2)),
+    videoIntervalP95Ms: Number(percentile(videoIntervals, 0.95).toFixed(2)),
+    videoIntervalMaxMs: Number(Math.max(0, ...videoIntervals).toFixed(2)),
+    maximumPresentedFrameGap: Math.max(0, ...sourceFrameGaps),
+    frameWorkP95Ms: Number(percentile(sweepFrames.map(({ workMs }) => workMs), 0.95).toFixed(2)),
+    gradientsPerFrameP95: percentile(sweepFrames.map(({ gradients }) => gradients), 0.95),
+    gradientsPerFrameMax: Math.max(0, ...sweepFrames.map(({ gradients }) => gradients)),
+  };
+  console.log(`Level 1 green animation frame budget: ${JSON.stringify(report)}`);
+  await testInfo.attach('level1-green-frame-budget.json', {
+    body: Buffer.from(JSON.stringify(report, null, 2)),
+    contentType: 'application/json',
+  });
+  expect(report.sourceFrames, 'measure the full green source animation rather than a few opening frames').toBeGreaterThanOrEqual(45);
+  expect(report.decodedVideoFrames, 'the source video should present at least 50 frames during the green sweep').toBeGreaterThanOrEqual(50);
+  expect(report.videoIntervalP95Ms, 'the source video should stay close to 60 fps').toBeLessThan(21);
+  expect(report.videoIntervalMaxMs, 'the source video should not pause for multiple refreshes').toBeLessThan(35);
+  expect(report.maximumPresentedFrameGap, 'the source video should not skip more than one consecutive frame').toBeLessThanOrEqual(2);
+  expect(report.frameIntervalP95Ms, 'the Canvas should keep its regular 60 fps cadence during the green sweep').toBeLessThan(20);
+  expect(report.frameIntervalMaxMs, 'the green sweep should avoid multi-frame repaint stalls').toBeLessThan(40);
+  expect(report.frameWorkP95Ms, 'the game frame callback should leave time for browser compositing').toBeLessThan(8);
+  expect(report.gradientsPerFrameP95, 'reuse one empty-wall gradient per row instead of creating one per empty cell').toBeLessThanOrEqual(120);
 });
 
 test('Level 1 只拖绿色槽时红色槽画面保持原位', async ({ page }, testInfo) => {
