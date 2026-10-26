@@ -1476,6 +1476,17 @@ function levelTwoRecordedBucketPosition(color, sourceTime) {
   return null;
 }
 
+function syncLevelTwoSourceBucketHitboxes(sourceTime) {
+  for (const bucket of state.game.buckets) {
+    if (state.dragging && state.game.activeBucketId === bucket.id) continue;
+    const sourcePosition = levelTwoRecordedBucketPosition(bucket.color, sourceTime);
+    if (!sourcePosition) continue;
+    bucket.x = sourcePosition.x;
+    bucket.y = sourcePosition.y;
+    if (sourcePosition.height) setLevelTwoGreenBucketHeight(bucket, sourcePosition.height);
+  }
+}
+
 function setLevelTwoGreenBucketHeight(bucket, height) {
   if (bucket.color !== 'green') return;
   const lift = Math.max(0, Math.min(1, (height - 198) / 40));
@@ -2697,6 +2708,10 @@ function advanceLevelTwoSourcePlayback(now) {
     return;
   }
   if (timeline.seeking) return;
+  // The source panel shows buckets moving during the recorded sequence. Keep
+  // their hitboxes in the same positions so a real pointer can grab the slot
+  // where it is visibly drawn, rather than its stale opening position.
+  syncLevelTwoSourceBucketHitboxes(video.currentTime);
   if (video.paused) void video.play().catch(() => {});
 }
 
