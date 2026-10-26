@@ -3864,6 +3864,11 @@ function onPointerDown(event) {
       }
     }
   }
+  if (state.game.level === 2 && !state.levelTwoSourceTimeline
+      && !state.levelTwoInteractive && bucket.color !== 'red') {
+    state.levelTwoInteractive = true;
+    liveStatus.textContent = '自由操作：把颜色槽拖到上方同色像素区';
+  }
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   if (state.game.level === 1) audio.setSourceMixMode(true);
@@ -3952,8 +3957,14 @@ function onPointerMove(event) {
       bucket.y = bucket.sweep ? Math.max(next.y, wallBottom + 9) : next.y;
       if (!bucket.sweep && bucket.y <= wallBottom + 64) startLevelOneSweep(bucket, performance.now());
     } else if (state.game.level === 2) {
+      const previous = { x: bucket.x, y: bucket.y };
       bucket.x = next.x;
       bucket.y = next.y;
+      if (state.levelTwoInteractive && !state.levelTwoSourceTimeline) {
+        const cells = collectAlongPath(state.game, bucket.id, previous, next);
+        if (cells.length) bucket.sourceProgressStartedAt ??= state.dragStartedAt;
+        addCollectedEffects(cells, performance.now(), bucket);
+      }
       if (bucket.color === 'green') {
         const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
         setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
@@ -4289,9 +4300,25 @@ function onPointerUp(event) {
   if (reservedLevelThreeSourceMix && !acceptedLevelThreeSource) audio.setSourceMixMode(false);
   if (bucket && state.dragDistance > 5 && !acceptedLevelEightSource) {
     const levelTwoDocked = state.game.level === 2 && dockLevelTwoBucket(bucket, state.dragStartedAt);
+    if (state.game.level === 2 && !levelTwoDocked && state.levelTwoSourceTimeline) {
+      leaveLevelTwoSourceSequence();
+    }
+    if (state.game.level === 2 && !levelTwoDocked && state.moveCollected === 0) {
+      const cells = collectAlongPath(state.game, bucket.id, state.dragOrigin, { x: bucket.x, y: bucket.y });
+      if (cells.length) bucket.sourceProgressStartedAt ??= state.dragStartedAt;
+      addCollectedEffects(cells, performance.now(), bucket);
+    }
     if (acceptedLevelThreeSource) {
       // The recorded source track continues the exact, observed first move.
     } else if (levelTwoDocked) {
+      liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
+    } else if (state.game.level === 2 && state.moveCollected > 0) {
+      state.levelTwoInteractive = true;
+      if (!bucket.sourceCollectionActive) {
+        if (state.game.moves === 0) state.game.moves += 1;
+        bucket.sourceCollectionActive = true;
+        bucket.sourceProgressStartedAt ??= state.dragStartedAt;
+      }
       liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
     } else if (state.moveCollected === 0 && state.game.status !== 'won') {
       bucket.x = state.dragOrigin.x;
