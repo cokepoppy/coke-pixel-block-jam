@@ -102,6 +102,7 @@ const state = {
   transitionTimer: null,
   levelOneSourceTimeline: null,
   levelTwoSourceTimeline: null,
+  levelTwoInteractive: false,
   levelThreeSourceTimeline: null,
   levelEightSourceTimeline: null,
   levelEightSourceCandidate: null,
@@ -1251,16 +1252,39 @@ function drawPixelWall() {
         continue;
       }
     }
-    const boardHasNoClearedCells = state.game.grid
-      .slice(board.cellOffset, board.cellOffset + cols * rows)
-      .every((cell) => cell && !cell.split);
-    if (state.game.level === 11 && boardHasNoClearedCells) {
+    if (state.game.level === 11) {
       const image = levelElevenBoardImages[board.id];
       if (image?.complete && image.naturalWidth > 0) {
         ctx.save();
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(image, x, y, width, height);
         ctx.restore();
+
+        // Preserve the sampled source pixels for every untouched cell. Once a
+        // cell is collected, only paint its flat blue backing; redrawing the
+        // other ~1,900 cells here created a fresh CanvasGradient per pixel on
+        // every animation frame and made the two-board level stutter.
+        const clearedCellColor = '#3a8ad7';
+        for (let row = 0; row < rows; row += 1) {
+          const py = y + Math.round(row * height / rows);
+          const cellBottom = y + Math.round((row + 1) * height / rows);
+          for (let column = 0; column < cols; column += 1) {
+            const cell = state.game.grid[board.cellOffset + row * cols + column];
+            if (cell && !cell.split) continue;
+            const px = x + Math.round(column * width / cols);
+            const cellRight = x + Math.round((column + 1) * width / cols);
+            ctx.fillStyle = clearedCellColor;
+            ctx.fillRect(px, py, cellRight - px, cellBottom - py);
+            if (!cell) continue;
+
+            const cellWidth = cellRight - px;
+            const cellHeight = cellBottom - py;
+            drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column);
+            drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 1);
+            drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 2);
+            drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, row * cols + column + 3);
+          }
+        }
         continue;
       }
     }
@@ -2685,13 +2709,13 @@ function advanceLevelTwoCollectionProgress(now) {
     const before = getProgress(state.game, bucket);
     const total = state.game.bucketTotals[bucket.id];
     const elapsedMs = Math.max(0, now - bucket.sourceProgressStartedAt);
-    if (bucket.color === 'green' && state.game.activeBucketId !== bucket.id) {
+    if (state.levelTwoSourceTimeline && bucket.color === 'green' && state.game.activeBucketId !== bucket.id) {
       const sourcePosition = levelTwoRecordedBucketPosition('green', levelTwoSourceGameplayVideo.currentTime);
       bucket.x = sourcePosition.x;
       bucket.y = sourcePosition.y;
       setLevelTwoGreenBucketHeight(bucket, sourcePosition.height ?? 198);
     }
-    if (bucket.color === 'yellow' && state.game.activeBucketId !== bucket.id) {
+    if (state.levelTwoSourceTimeline && bucket.color === 'yellow' && state.game.activeBucketId !== bucket.id) {
       const reposition = Math.max(0, Math.min(1, (elapsedMs - 400) / 600));
       bucket.y = 520 + 10 * reposition;
     }
@@ -3770,6 +3794,21 @@ const LEVEL_TWO_DOCKS = {
   yellow: { x: 50, y: 520 },
 };
 
+const LEVEL_TWO_SOURCE_ACTION_WINDOWS = {
+  green: { earliestMs: 2_200, latestMs: 3_500 },
+  yellow: { earliestMs: 4_100, latestMs: 6_000 },
+};
+
+function leaveLevelTwoSourceSequence() {
+  if (!state.levelTwoSourceTimeline) return;
+  state.levelTwoSourceTimeline = null;
+  state.levelTwoInteractive = true;
+  levelTwoSourceGameplayVideo.pause();
+  resetLevelTwoSourceAudio();
+  audio.setSourceMixMode(false);
+  liveStatus.textContent = '自由操作：把颜色槽拖到上方同色像素区';
+}
+
 function dockLevelTwoBucket(bucket, startedAt) {
   const dock = LEVEL_TWO_DOCKS[bucket.color];
   const atSourceDock = dock && Math.hypot(bucket.x - dock.x, bucket.y - dock.y) <= 30;
@@ -3780,9 +3819,11 @@ function dockLevelTwoBucket(bucket, startedAt) {
   if (!bucket.sourceCollectionActive) {
     const firstBucketMove = state.game.moves === 0;
     state.game.moves += 1;
-    if (firstBucketMove && bucket.color === 'red') {
+    if (firstBucketMove && bucket.color === 'red' && !state.levelTwoInteractive) {
       state.levelTwoSourceTimeline = { startedAt, pausedAt: null, seeking: false };
       audio.setSourceMixMode(true);
+    } else if (firstBucketMove && bucket.color !== 'red') {
+      state.levelTwoInteractive = true;
     }
   }
   bucket.sourceCollectionActive = true;
@@ -3814,13 +3855,22 @@ function onPointerDown(event) {
   }
   const bucket = getBucketAt(state.game, point.x, point.y);
   if (!bucket) return;
+  if (state.game.level === 2 && state.levelTwoSourceTimeline && !bucket.sourceCollectionActive) {
+    const actionWindow = LEVEL_TWO_SOURCE_ACTION_WINDOWS[bucket.color];
+    if (actionWindow) {
+      const elapsed = performance.now() - state.levelTwoSourceTimeline.startedAt;
+      if (elapsed < actionWindow.earliestMs || elapsed > actionWindow.latestMs) {
+        leaveLevelTwoSourceSequence();
+      }
+    }
+  }
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   if (state.game.level === 1) audio.setSourceMixMode(true);
   if (state.game.level === 3 && bucket.id === 'purple' && state.game.moves === 0) {
     audio.setSourceMixMode(true);
   }
-  if (state.game.level === 2 && !state.levelTwoSourceTimeline) {
+  if (state.game.level === 2 && !state.levelTwoSourceTimeline && !state.levelTwoInteractive) {
     // A muted play request inside this trusted pointer gesture unlocks the
     // original mixed track before the first valid red dock starts its timeline.
     levelTwoSourceAudio.muted = true;
@@ -3908,7 +3958,6 @@ function onPointerMove(event) {
         const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
         setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
       }
-      dockLevelTwoBucket(bucket, state.dragStartedAt);
     } else {
       const cells = collectAlongPath(state.game, bucket.id, { x: bucket.x, y: bucket.y }, next);
       addCollectedEffects(cells, performance.now(), bucket);
@@ -3942,6 +3991,7 @@ function restartCurrentLevel() {
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
+  state.levelTwoInteractive = false;
   state.levelOneWonPending = false;
   state.game = createGameState(state.game.level);
   state.endDialogShown = false;
@@ -3971,6 +4021,7 @@ function advanceToNextLevel() {
   audio.setSourceMixMode(false);
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
+  state.levelTwoInteractive = false;
   state.levelOneWonPending = false;
   state.game = startNextLevel(state.game);
   state.endDialogShown = false;

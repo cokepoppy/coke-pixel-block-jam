@@ -2280,6 +2280,31 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   expect(diff, `Level 2 board changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
 });
 
+test('Level 2 快速连续拖动会退出源片锁位并按实际落槽完成', async ({ page }) => {
+  test.setTimeout(15_000);
+  await page.goto('/?previewLevel=2');
+
+  const sourceVideo = page.locator('#level-two-source-gameplay-video');
+  const canvas = page.locator('#game-canvas');
+  const dragToDock = async (fromX, fromY, toX, toY) => {
+    await dragThroughAt60Hz(page, fromX, fromY, [{ x: toX, y: toY, durationMs: 120 }]);
+  };
+
+  await dragToDock(450, 750, 450, 550);
+  await dragToDock(100, 750, 100, 510);
+  await expect.poll(() => sourceVideo.evaluate((video) => video.paused), {
+    message: 'an early green move should stop the forced source-position timeline',
+  }).toBe(true);
+  const pausedSourceTime = await sourceVideo.evaluate((video) => video.currentTime);
+  await page.waitForTimeout(150);
+  expect(await sourceVideo.evaluate((video) => video.currentTime)).toBeCloseTo(pausedSourceTime, 1);
+  await expect.poll(() => canvas.evaluate((element) => Number(element.dataset.progressGreen)))
+    .toBeGreaterThan(0);
+
+  await dragToDock(300, 875, 199, 564);
+  await expect(page.locator('#live-status')).toContainText('第 3 关开始', { timeout: 12_000 });
+});
+
 test('第 3–13 关过场预览与对应开局画面逐像素一致', async ({ page }, testInfo) => {
   test.setTimeout(30_000);
   for (let level = 3; level <= 13; level += 1) {
@@ -4177,6 +4202,139 @@ test('Level 11 上下棋盘开局与录屏 05:23 源帧逐像素一致', async (
       actual.info.width, actual.info.height, { threshold: 0.16, includeAA: false });
     expect(diff, `Level 11 ${boardId} board differs at ${diff} pixels`).toBe(0);
   }
+});
+
+test('Level 11 紫槽真实拖动时保留未动源像素并维持逐帧预算', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.addInitScript(() => {
+    const probe = window.__levelElevenFrameProbe = { active: false, samples: [], gradientCount: 0, lastTimestamp: null };
+    const contextPrototype = CanvasRenderingContext2D.prototype;
+    const originalGradient = contextPrototype.createLinearGradient;
+    contextPrototype.createLinearGradient = function createLinearGradient(...args) {
+      probe.gradientCount += 1;
+      return originalGradient.apply(this, args);
+    };
+    const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => originalRequestAnimationFrame((timestamp) => {
+      const gradientsBefore = probe.gradientCount;
+      const startedAt = performance.now();
+      callback(timestamp);
+      if (!probe.active) return;
+      probe.samples.push({
+        timestamp,
+        interval: probe.lastTimestamp === null ? null : timestamp - probe.lastTimestamp,
+        callbackMs: performance.now() - startedAt,
+        gradients: probe.gradientCount - gradientsBefore,
+      });
+      probe.lastTimestamp = timestamp;
+    });
+  });
+
+  await page.goto('/?previewLevel=11');
+  await page.waitForFunction(() => ['upper', 'lower'].every((boardId) => (
+    performance.getEntriesByType('resource').some(({ name }) => (
+      name.endsWith(`/assets/level11/level11-${boardId}-board.png`)
+    ))
+  )));
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  await page.evaluate(() => {
+    const probe = window.__levelElevenFrameProbe;
+    probe.samples.length = 0;
+    probe.lastTimestamp = null;
+    probe.active = true;
+  });
+
+  const canvas = await page.locator('#game-canvas').boundingBox();
+  if (!canvas) throw new Error('游戏画布没有显示');
+  const pointerAt = (x, y) => ({
+    x: canvas.x + (x / 597) * canvas.width,
+    y: canvas.y + (y / 1296) * canvas.height,
+  });
+  const start = pointerAt(257, 551);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 30; step += 1) {
+    const progress = step / 30;
+    const point = pointerAt(257 + 80 * progress, 551 - 337 * progress);
+    await page.mouse.move(point.x, point.y);
+    await page.waitForTimeout(16);
+  }
+  for (let step = 1; step <= 8; step += 1) {
+    const point = pointerAt(337, 214 + 80 * step / 8);
+    await page.mouse.move(point.x, point.y);
+    await page.waitForTimeout(16);
+  }
+  await page.mouse.up();
+  await expect(page.locator('#live-status')).toContainText('进度 100%');
+  await page.waitForTimeout(500);
+
+  const frameStats = await page.evaluate(() => {
+    const samples = window.__levelElevenFrameProbe.samples;
+    const percentile = (values, p) => {
+      const sorted = [...values].sort((left, right) => left - right);
+      return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+    };
+    return {
+      frames: samples.length,
+      intervalP95: percentile(samples.map(({ interval }) => interval).filter(Number.isFinite), 0.95),
+      callbackP95: percentile(samples.map(({ callbackMs }) => callbackMs), 0.95),
+      gradientsP95: percentile(samples.map(({ gradients }) => gradients), 0.95),
+      gradientsMax: Math.max(...samples.map(({ gradients }) => gradients)),
+    };
+  });
+  expect(frameStats.frames).toBeGreaterThan(30);
+  expect(frameStats.intervalP95).toBeLessThan(34);
+  expect(frameStats.callbackP95).toBeLessThan(8);
+  expect(frameStats.gradientsP95).toBeLessThan(120);
+  expect(frameStats.gradientsMax).toBeLessThan(140);
+
+  await page.waitForTimeout(900);
+  const initialState = createGameState(11);
+  const clearedCell = initialState.grid.find((cell) => (
+    cell?.targetBucketId === 'purple-lower-left' && cell.row === 1
+  ));
+  expect(clearedCell).toBeDefined();
+  const clearedPixel = await page.evaluate(({ x, y }) => {
+    const canvasElement = document.querySelector('#game-canvas');
+    const scale = canvasElement.width / 597;
+    return [...canvasElement.getContext('2d').getImageData(Math.round(x * scale), Math.round(y * scale), 1, 1).data].slice(0, 3);
+  }, clearedCell);
+  expect(clearedPixel[0]).toBeGreaterThanOrEqual(54);
+  expect(clearedPixel[0]).toBeLessThanOrEqual(62);
+  expect(clearedPixel[1]).toBeGreaterThanOrEqual(132);
+  expect(clearedPixel[1]).toBeLessThanOrEqual(144);
+  expect(clearedPixel[2]).toBeGreaterThanOrEqual(208);
+  expect(clearedPixel[2]).toBeLessThanOrEqual(222);
+
+  const screenshot = await page.screenshot();
+  const upperBoard = levelElevenBoardPixels.upper;
+  const upperLeftSource = await sharp(upperBoard.data, {
+    raw: { width: upperBoard.info.width, height: upperBoard.info.height, channels: upperBoard.info.channels },
+  })
+    .extract({ left: 0, top: 0, width: 231, height: 142 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const actualUpperLeft = await sharp(screenshot)
+    .extract({ left: 64, top: 193, width: 231, height: 142 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const upperDiff = pixelmatch(upperLeftSource.data, actualUpperLeft.data,
+    Buffer.alloc(actualUpperLeft.data.length), 231, 142, { threshold: 0.16, includeAA: false });
+  expect(upperDiff, `Untouched Level 11 upper board changed at ${upperDiff} pixels`).toBe(0);
+
+  const lowerBoard = initialState.grids.find(({ id }) => id === 'lower');
+  const actualLowerBoard = await sharp(screenshot)
+    .extract({ left: lowerBoard.rect.x, top: lowerBoard.rect.y, width: 462, height: 145 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const lowerDiff = pixelmatch(levelElevenBoardPixels.lower.data, actualLowerBoard.data,
+    Buffer.alloc(actualLowerBoard.data.length), 462, 145, { threshold: 0.16, includeAA: false });
+  expect(lowerDiff, `Level 11 lower board changed at ${lowerDiff} pixels`).toBe(0);
 });
 
 test('时间冻结、拆分锤与飞碟按道具规则响应点击', async ({ page }, testInfo) => {
