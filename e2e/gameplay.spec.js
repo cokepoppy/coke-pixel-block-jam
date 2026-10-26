@@ -576,8 +576,18 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
         const sourcePixels = sourceContext.getImageData(0, 0, 474, 219).data;
         const gamePixels = gameContext.getImageData(0, 0, 474, 219).data;
         let differentPixels = 0;
+        let comparedPixels = 0;
         let absoluteColorDifference = 0;
-        for (let offset = 0; offset < sourcePixels.length; offset += 4) {
+        const recordingVolumeHudVisible = sourceTime >= 2.65 && sourceTime < 3.85;
+        for (let pixel = 0; pixel < 474 * 219; pixel += 1) {
+          const x = pixel % 474;
+          const y = Math.floor(pixel / 474);
+          // The original phone recording's volume HUD overlaps this small
+          // left-edge rectangle. The replica deliberately reveals clean game
+          // pixels there, so exclude only that non-game recording overlay.
+          if (recordingVolumeHudVisible && x < 22 && y >= 100) continue;
+          const offset = pixel * 4;
+          comparedPixels += 1;
           const red = Math.abs(sourcePixels[offset] - gamePixels[offset]);
           const green = Math.abs(sourcePixels[offset + 1] - gamePixels[offset + 1]);
           const blue = Math.abs(sourcePixels[offset + 2] - gamePixels[offset + 2]);
@@ -590,8 +600,10 @@ async function startLevelOneSourceBoardFrameProbe(page, startTime, endTime) {
           sourceTime,
           frameLagMs: (source.currentTime - sourceTime) * 1_000,
           videoCurrentTime: source.currentTime,
+          excludedRecordingVolumeHud: recordingVolumeHudVisible,
+          comparedPixels,
           differentPixels,
-          meanAbsoluteColorError: absoluteColorDifference / (474 * 219 * 3),
+          meanAbsoluteColorError: absoluteColorDifference / (comparedPixels * 3),
         });
         if (differentPixels > 0 && !probe.firstMismatch) {
           probe.firstMismatch = {
@@ -1713,7 +1725,7 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   expect(greenFrameProbe.frames.length, 'compare at least 30 decoded green source frames to the rendered board').toBeGreaterThanOrEqual(30);
   expect(greenFrameProbe.frames[0].sourceTime, 'green source-frame checks should begin near the played segment start').toBeLessThan(3.1);
   expect(greenFrameProbe.frames.at(-1).sourceTime, 'green source-frame checks should cover the played segment end').toBeGreaterThan(3.9);
-  expect(greenFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every green source board frame should render without pixel changes')
+  expect(greenFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every green source board frame should render without game-pixel changes; the source-only volume HUD area is masked')
     .toBeTruthy();
 
   await startLevelOneSourceBoardFrameProbe(page, 4.0, 5.5);
@@ -1745,6 +1757,39 @@ test('Level 1 绿色与红色扫墙按录屏分段飞入对应收集槽', async 
   expect(redFrameProbe.frames.at(-1).sourceTime, 'red source-frame checks should cover the played segment before the brand transition').toBeGreaterThan(5.4);
   expect(redFrameProbe.frames.every(({ differentPixels }) => differentPixels === 0), 'every red source board frame should render without pixel changes')
     .toBeTruthy();
+});
+
+test('Level 1 只拖绿色槽时红色槽画面保持原位', async ({ page }, testInfo) => {
+  test.setTimeout(20_000);
+  const canvas = page.locator('#game-canvas');
+  const sourceVideo = page.locator('#level-one-source-video');
+  await page.goto('/?previewLevel=1');
+  await page.waitForFunction(() => document.querySelector('#game-canvas')?.dataset.gameStatus === 'tutorial');
+  await expect.poll(() => page.locator('#level-one-tutorial-video').evaluate((video) => video.ended)).toBe(true);
+
+  await drag(page, 111, 866, 111, 620);
+  await expect.poll(() => sourceVideo.evaluate((video) => video.currentTime), {
+    timeout: 5_000,
+  }).toBeGreaterThan(3.1);
+  const sourceTimeBeforeRedLift = await sourceVideo.evaluate((video) => video.currentTime);
+  const beforeRedLift = await canvas.screenshot({ path: testInfo.outputPath('level1-green-before-red-lift.png') });
+  await expect.poll(() => sourceVideo.evaluate((video) => video.currentTime), {
+    timeout: 5_000,
+  }).toBeGreaterThan(3.55);
+  const sourceTimeDuringGreen = await sourceVideo.evaluate((video) => video.currentTime);
+  expect(sourceTimeDuringGreen, 'capture before the green source timeline ends').toBeLessThan(3.78);
+  const duringGreen = await canvas.screenshot({ path: testInfo.outputPath('level1-green-only-red-tray.png') });
+  const crop = { left: 438, top: 500, width: 110, height: 490 };
+  const initialRed = await sharp(beforeRedLift).extract(crop).ensureAlpha().raw().toBuffer();
+  const duringRed = await sharp(duringGreen).extract(crop).ensureAlpha().raw().toBuffer();
+  const differentPixels = pixelmatch(initialRed, duringRed, Buffer.alloc(initialRed.length), crop.width, crop.height, {
+    threshold: 0.12,
+    includeAA: false,
+  });
+  await testInfo.attach('level1-green-before-red-lift.png', { body: beforeRedLift, contentType: 'image/png' });
+  await testInfo.attach('level1-green-only-red-tray.png', { body: duringGreen, contentType: 'image/png' });
+  console.log(`Level 1 inactive red tray visual diff during green-only move: ${differentPixels} pixels at source ${sourceTimeBeforeRedLift.toFixed(3)}s -> ${sourceTimeDuringGreen.toFixed(3)}s`);
+  expect(differentPixels, 'the visible red tray must not replay its source-video lift while only green was dragged').toBe(0);
 });
 
 test('Level 1 绿黄红连续真实拖动各自只移动对应收集槽并能通关', async ({ page }) => {

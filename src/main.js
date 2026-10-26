@@ -3362,10 +3362,20 @@ function drawLevelOneSourceBoardFrame() {
     ? levelOneSourceVideo
     : levelOneSourcePresentedFrameCanvas;
   const board = state.game.gridRect;
+  const sourceTime = levelOneSourcePresentedFrameTime ?? levelOneSourceVideo.currentTime;
+  const excludeRecordingVolumeHud = sourceTime >= 2.65 && sourceTime < 3.85;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
+  if (excludeRecordingVolumeHud) {
+    // Keep the source board frame but reveal clean live game pixels under the
+    // phone's system-volume overlay at the far-left edge.
+    ctx.beginPath();
+    ctx.rect(board.x, board.y, board.width, 100);
+    ctx.rect(board.x + 22, board.y + 100, board.width - 22, board.height - 100);
+    ctx.clip();
+  }
   ctx.drawImage(source, 44, 43, 474, 219, board.x, board.y, board.width, board.height);
   ctx.restore();
 }
@@ -3616,12 +3626,12 @@ function drawScene(now) {
   } else if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {
-    // The yellow source interval contains only its own sweep. Later intervals
-    // include neighboring slot motion, so those keep live slot rendering.
     if (state.levelOneSourceTimeline.color === 'yellow') {
       drawLevelOneBucketsUnderSourcePanel(LEVEL_ONE_ACTION_BLEND_START);
       drawLevelOneSourceActionPanel();
     } else {
+      // Reuse only the source wall. Its green/red segment also contains future
+      // tray lifts, so keep all collection slots driven by live game state.
       drawPixelWall();
       drawPad();
       drawBuckets();
