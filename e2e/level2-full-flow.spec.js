@@ -147,6 +147,14 @@ test('真实鼠标从 Level 1 进入 Level 2 并拖动三色通关，保存浏�
   });
 
   await dragCanvasPath(page, { x: 300, y: 875 }, { x: 348, y: 494 });
+  await expect.poll(progress, { timeout: 8_000 }).toMatchObject({ green: 100, red: 100, yellow: 100 });
+  await saveFrame('level2-completed-before-transition');
+  observations.push({
+    checkpoint: 'yellow slot completed the board before the level transition',
+    status: await page.locator('#live-status').innerText(),
+    progress: await progress(),
+  });
+
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 15_000 });
   await saveFrame('level3-reached');
   observations.push({
