@@ -37,6 +37,7 @@ const previewLevelOneAssetGate = hasPreviewLevel && requestedPreviewLevel === 1 
 const previewLevelThreeAssetGate = hasPreviewLevel && requestedPreviewLevel === 3 && !requestedSplashPreview;
 const levelTwoWinSettleDurationMs = 900;
 const levelTwoTransitionDurationMs = 1200;
+const LEVEL_THREE_SOURCE_DURATION_SECONDS = 23;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
 
 const COLORS_3D = {
@@ -2238,7 +2239,9 @@ function syncLevelThreeSourceAudio(targetTime, shouldPlay) {
   }
   levelThreeSourceAudio.muted = false;
   if (levelThreeSourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || levelThreeSourceAudio.seeking) return;
-  const duration = Number.isFinite(levelThreeSourceAudio.duration) ? levelThreeSourceAudio.duration : 8;
+  const duration = Number.isFinite(levelThreeSourceAudio.duration)
+    ? levelThreeSourceAudio.duration
+    : LEVEL_THREE_SOURCE_DURATION_SECONDS;
   const safeTargetTime = Math.max(0, Math.min(duration - 0.01, targetTime));
   if (Math.abs(safeTargetTime - levelThreeSourceAudio.currentTime) > 0.08) {
     levelThreeSourceAudio.pause();
@@ -2251,15 +2254,59 @@ function syncLevelThreeSourceAudio(targetTime, shouldPlay) {
 }
 
 const LEVEL_THREE_SOURCE_BUCKET_POSITION_TRACKS = {
-  purple: [[0, 447, 773], [0.25, 436, 621], [0.5, 450, 480], [4.6, 450, 480], [4.75, 450, 624], [5.25, 150, 655], [5.5, 150, 680], [8, 150, 680]],
-  blue: [[0, 149, 872], [1.4, 149, 872], [1.5, 158, 812], [1.75, 118, 505], [2, 51, 480], [8, 51, 480]],
-  yellow: [[0, 49, 773], [3.1, 49, 773], [3.25, 234, 708], [3.5, 351, 480], [5.9, 351, 480], [6, 449, 480], [8, 449, 480]],
+  purple: [
+    [0, 447, 773], [0.25, 436, 621], [0.5, 450, 480], [4.6, 450, 480],
+    [4.75, 450, 624], [5.25, 150, 655], [5.5, 150, 680], [7.75, 150, 680],
+    [8, 234, 654], [8.25, 367, 462], [8.5, 350, 480], [11.5, 350, 480],
+    [11.75, 156, 462], [12, 151, 480], [13.75, 151, 480], [14, 73, 462],
+    [14.25, 51, 480], [17.5, 51, 480], [17.75, 361, 462], [18, 350, 480],
+    [LEVEL_THREE_SOURCE_DURATION_SECONDS, 350, 480],
+  ],
+  blue: [
+    [0, 149, 872], [1.4, 149, 872], [1.5, 158, 812], [1.75, 118, 505],
+    [2, 51, 480], [11, 51, 480], [11.25, 66, 716], [11.5, 67, 774],
+    [13, 75, 774], [13.25, 272, 757], [13.5, 255, 774], [14.5, 255, 774],
+    [14.75, 244, 609], [15, 255, 480], [16, 255, 480], [16.5, 222, 798],
+    [16.75, 155, 872], [18.25, 155, 872], [18.5, 44, 462], [19, 55, 480],
+    [20.75, 55, 480], [21, 266, 470], [21.25, 255, 480],
+    [LEVEL_THREE_SOURCE_DURATION_SECONDS, 255, 480],
+  ],
+  yellow: [
+    [0, 49, 773], [3.1, 49, 773], [3.25, 234, 708], [3.5, 351, 480],
+    [5.9, 351, 480], [6, 449, 480], [12.25, 449, 480], [12.5, 239, 470],
+    [12.75, 251, 480], [14.25, 251, 480], [14.5, 151, 480], [16.5, 151, 480],
+    [16.75, 345, 462], [17, 345, 462], [17.25, 450, 480], [20, 450, 480],
+    [20.25, 339, 585], [20.5, 162, 683], [20.75, 151, 675], [21.25, 151, 675],
+    [21.5, 73, 462], [21.75, 51, 480],
+    [LEVEL_THREE_SOURCE_DURATION_SECONDS, 51, 480],
+  ],
 };
 
 const LEVEL_THREE_SOURCE_PROGRESS_TRACKS = {
-  purple: [[0, 0], [0.9, 0], [1, 1], [1.25, 2], [1.5, 36], [1.75, 45], [2, 48], [8, 48]],
-  blue: [[0, 0], [2.25, 0], [2.5, 4], [2.75, 8], [3, 12], [3.25, 18], [3.5, 22], [4, 25], [4.25, 27], [4.5, 28], [4.75, 30], [5, 31], [5.25, 32], [5.5, 34], [5.75, 35], [6, 36], [6.25, 38], [6.5, 39], [6.75, 40], [7, 41], [7.25, 43], [7.5, 44], [8, 45]],
-  yellow: [[0, 0], [4.1, 0], [4.25, 1], [6.25, 1], [6.5, 9], [8, 9]],
+  purple: [
+    [0, 0], [0.9, 0], [1, 1], [1.25, 2], [1.5, 36], [1.75, 45], [2, 48],
+    [8, 48], [8.25, 48], [8.5, 48], [8.75, 54], [9, 64], [9.25, 68],
+    [11.75, 68], [12.25, 78], [12.5, 89], [12.75, 90], [13, 91], [13.25, 92],
+    [18, 92], [18.25, 97], [18.5, 100], [LEVEL_THREE_SOURCE_DURATION_SECONDS, 100],
+  ],
+  blue: [
+    [0, 0], [2.25, 0], [2.5, 4], [2.75, 8], [3, 12], [3.25, 18], [3.5, 22],
+    [4, 25], [4.25, 27], [4.5, 28], [4.75, 30], [5, 31], [5.25, 32],
+    [5.5, 34], [5.75, 35], [6, 36], [6.25, 38], [6.5, 39], [6.75, 40],
+    [7, 41], [7.25, 43], [7.5, 44], [8, 47], [8.25, 48], [8.5, 49],
+    [8.75, 51], [9, 52], [9.25, 53], [9.5, 54], [9.75, 55], [10, 56],
+    [10.25, 57], [10.5, 58], [12.25, 58], [15, 58], [15.25, 61],
+    [15.5, 77], [15.75, 79], [18.5, 79], [19, 87], [19.25, 99],
+    [21.25, 99], [21.5, 100], [LEVEL_THREE_SOURCE_DURATION_SECONDS, 100],
+  ],
+  yellow: [
+    [0, 0], [4.1, 0], [4.25, 1], [6.25, 1], [6.5, 9], [12.25, 9],
+    [12.5, 9], [12.75, 9], [13, 20], [13.25, 35], [13.5, 50], [13.75, 53],
+    [14, 55], [14.25, 56], [14.5, 57], [14.75, 58], [15, 72], [15.25, 73],
+    [15.5, 73], [15.75, 74], [16.5, 74], [16.75, 77], [17, 80],
+    [17.25, 81], [17.5, 83], [17.75, 90], [20.5, 90], [20.75, 91],
+    [21.5, 91], [22, 97], [22.25, 100], [LEVEL_THREE_SOURCE_DURATION_SECONDS, 100],
+  ],
 };
 
 function sampleLevelThreeSourceTrack(points, sourceTime) {
@@ -2276,6 +2323,9 @@ function sampleLevelThreeSourceTrack(points, sourceTime) {
 
 function updateLevelThreeSourceGameState(sourceTime, now) {
   if (!state.levelThreeSourceTimeline?.accepted) return;
+  const videoDuration = Number.isFinite(levelThreeSourceGameplayVideo.duration)
+    ? levelThreeSourceGameplayVideo.duration
+    : LEVEL_THREE_SOURCE_DURATION_SECONDS;
   for (const bucket of state.game.buckets) {
     const [x, y] = sampleLevelThreeSourceTrack(LEVEL_THREE_SOURCE_BUCKET_POSITION_TRACKS[bucket.id], sourceTime);
     if (!state.dragging) {
@@ -2284,7 +2334,14 @@ function updateLevelThreeSourceGameState(sourceTime, now) {
     }
 
     const [sourceProgress] = sampleLevelThreeSourceTrack(LEVEL_THREE_SOURCE_PROGRESS_TRACKS[bucket.id], sourceTime);
-    const targetCollected = Math.round(state.game.bucketTotals[bucket.id] * sourceProgress / 100);
+    const total = state.game.bucketTotals[bucket.id];
+    let targetCollected = Math.round(total * sourceProgress / 100);
+    // The source keeps its final yellow 100% tray and celebratory particles on
+    // screen for a short beat before the next transition. Hold one model cell
+    // until the source clip ends so the web game does not transition early.
+    if (bucket.id === 'yellow' && targetCollected >= total && sourceTime < videoDuration) {
+      targetCollected = Math.min(targetCollected, Math.max(0, total - 1));
+    }
     const remaining = targetCollected - state.game.bucketCollected[bucket.id];
     if (remaining > 0) {
       const cells = fillBucket(state.game, bucket.id, remaining);
@@ -2295,6 +2352,16 @@ function updateLevelThreeSourceGameState(sourceTime, now) {
   if (state.levelThreeSourceTimeline.lastSummary !== summary) {
     state.levelThreeSourceTimeline.lastSummary = summary;
     liveStatus.textContent = `收集进度：${summary}`;
+  }
+  if (typeof window.__levelThreeSourceStateObserver === 'function') {
+    window.__levelThreeSourceStateObserver({
+      sourceTime,
+      videoDuration,
+      status: state.game.status,
+      remainingCells: state.game.grid.filter(Boolean).length,
+      bucketCollected: { ...state.game.bucketCollected },
+      bucketTotals: { ...state.game.bucketTotals },
+    });
   }
 }
 
@@ -2386,7 +2453,10 @@ function cancelLevelThreeSourcePlayback() {
 function finishLevelThreeSourcePlayback() {
   const timeline = state.levelThreeSourceTimeline;
   if (!timeline?.completed) return;
-  updateLevelThreeSourceGameState(levelThreeSourceGameplayVideo.duration || 8, performance.now());
+  updateLevelThreeSourceGameState(
+    levelThreeSourceGameplayVideo.duration || LEVEL_THREE_SOURCE_DURATION_SECONDS,
+    performance.now(),
+  );
   state.levelThreeSourceTimeline = null;
   levelThreeSourceGameplayVideo.pause();
   levelThreeSourceAudio.pause();
@@ -2629,7 +2699,9 @@ function advanceLevelThreeSourcePlayback(now) {
   }
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
 
-  const duration = Number.isFinite(video.duration) ? video.duration : 8;
+  const duration = Number.isFinite(video.duration)
+    ? video.duration
+    : LEVEL_THREE_SOURCE_DURATION_SECONDS;
   const elapsed = Math.max(0, (now - timeline.startedAt) / 1_000);
   const targetTime = Math.min(duration - (1 / 60), elapsed);
   const drift = targetTime - video.currentTime;
@@ -3849,11 +3921,18 @@ function dockLevelTwoBucket(bucket, startedAt) {
 function onPointerDown(event) {
   if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
   if (state.levelEightSourceTimeline) return;
+  const point = mapPointer(event);
   if (state.game.level === 3 && state.levelThreeSourceTimeline) {
     if (state.levelThreeSourceTimeline.completed) finishLevelThreeSourcePlayback();
-    else return;
+    else {
+      // The recorded source clip is a visual guide, but a real drag must be
+      // able to take over from the tray position shown in that exact frame.
+      updateLevelThreeSourceGameState(levelThreeSourceGameplayVideo.currentTime, performance.now());
+      if (!getBucketAt(state.game, point.x, point.y)) return;
+      cancelLevelThreeSourcePlayback();
+      liveStatus.textContent = '自由操作：拖动颜色槽收集剩余像素';
+    }
   }
-  const point = mapPointer(event);
   if (state.ufoMode) {
     const selected = getBucketAt(state.game, point.x, point.y);
     if (activateSelectedBucket(selected, performance.now())) {
@@ -4305,6 +4384,7 @@ function onPointerUp(event) {
         bucket.x = 447;
         bucket.y = 480;
         state.moveCollected = Math.max(1, state.moveCollected);
+        state.game.moves += 1;
         state.game.started = true;
         state.game.status = 'playing';
         acceptedLevelThreeSource = true;

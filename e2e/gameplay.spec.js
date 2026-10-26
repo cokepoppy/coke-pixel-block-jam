@@ -2423,8 +2423,8 @@ test('Level 3 开局主面板无遮挡区与原片逐像素一致，操作垫延
   expect(edgeMeanAbsoluteError, 'the source crop should fade into the lower native tray without a horizontal cut').toBeLessThan(5);
 });
 
-test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧匹配且下沿连续', async ({ page }, testInfo) => {
-  test.setTimeout(30_000);
+test('Level 3 首次真实拖动启动 23 秒源片回放，无遮挡区逐帧匹配并完整通关', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto('/?previewLevel=3');
@@ -2444,6 +2444,29 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
     const seen = new Set();
     window.__levelThreePresentedSourceFrames = [];
     window.__levelThreeSourceFrameComparisons = [];
+    window.__levelThreeSourceStateSamples = [];
+    window.__levelThreeSourceStateObserver = (sample) => {
+      if (sample.sourceTime >= 21.75) window.__levelThreeSourceStateSamples.push(sample);
+    };
+    window.__levelThreeWinObservation = null;
+    const observeWin = () => {
+      if (game.dataset.gameStatus !== 'won' || window.__levelThreeWinObservation) return;
+      window.__levelThreeWinObservation = {
+        videoTime: video.currentTime,
+        videoDuration: video.duration,
+        videoEnded: video.ended,
+        progress: {
+          purple: game.dataset.progressPurple,
+          blue: game.dataset.progressBlue,
+          yellow: game.dataset.progressYellow,
+        },
+      };
+    };
+    new MutationObserver(observeWin).observe(game, {
+      attributes: true,
+      attributeFilter: ['data-game-status'],
+    });
+    observeWin();
     window.__levelThreeSourceFrameObserver = (metadata) => {
       const frame = Math.round(metadata.mediaTime * 60);
       if (seen.has(frame)) return;
@@ -2477,8 +2500,8 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
   await expect(page.locator('#live-status')).toContainText('紫色');
   try {
     await expect.poll(() => page.evaluate(() => (
-      window.__levelThreeSourceFrameComparisons?.some(({ frame }) => frame >= 465)
-    )), { timeout: 10_000 }).toBeTruthy();
+      window.__levelThreeSourceFrameComparisons?.some(({ frame }) => frame >= 1_350)
+    )), { timeout: 38_000 }).toBeTruthy();
   } catch (error) {
     const playbackDiagnostics = await page.evaluate(() => {
       const video = document.querySelector('#level-three-source-gameplay-video');
@@ -2500,6 +2523,7 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
         lastPresentedFrame: frames.at(-1) ?? null,
         comparisonCount: comparisons.length,
         lastComparison: comparisons.at(-1) ?? null,
+        winObservation: window.__levelThreeWinObservation,
         progress: {
           purple: canvas.dataset.progressPurple,
           blue: canvas.dataset.progressBlue,
@@ -2520,27 +2544,43 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
   const maximumPresentedFrameGap = presentedFrames.reduce((maximum, frame, index) => (
     index === 0 ? maximum : Math.max(maximum, frame - presentedFrames[index - 1])
   ), 0);
-  expect(presentedFrames.length, 'the browser should present frames throughout the 8-second source clip')
-    .toBeGreaterThanOrEqual(250);
+  expect(presentedFrames.length, 'the browser should present frames throughout the full 23-second source clip')
+    .toBeGreaterThanOrEqual(650);
   expect(presentedFrames[0]).toBeLessThanOrEqual(5);
-  expect(presentedFrames.at(-1)).toBeGreaterThanOrEqual(465);
+  expect(presentedFrames.at(-1)).toBeGreaterThanOrEqual(1_350);
   expect(presentedFrames.every((frame, index) => index === 0 || frame > presentedFrames[index - 1]))
     .toBeTruthy();
   expect(maximumPresentedFrameGap, 'source playback should not skip more than three frames between presented frames')
     .toBeLessThanOrEqual(4);
-  expect(comparison.length, 'compare source-aligned frames across the full clip').toBeGreaterThanOrEqual(29);
+  expect(comparison.length, 'compare source-aligned frames across the full clip').toBeGreaterThanOrEqual(80);
   expect(comparison[0].frame, 'source-frame comparisons should start near the beginning of the clip').toBeLessThanOrEqual(20);
-  expect(comparison.at(-1).frame, 'source-frame comparisons should reach the end of the clip').toBeGreaterThanOrEqual(465);
+  expect(comparison.at(-1).frame, 'source-frame comparisons should reach the end of the clip').toBeGreaterThanOrEqual(1_350);
   expect(comparison.every(({ ratio }) => ratio === 0), 'each compared canvas frame should match its presented source frame exactly')
     .toBeTruthy();
-  expect(comparison.every(({ bottomEdgeMae }) => bottomEdgeMae < 5), 'the lower edge should remain continuous throughout source playback')
+  const openingEdgeComparisons = comparison.filter(({ mediaTime }) => mediaTime < 8);
+  expect(openingEdgeComparisons.length, 'keep the original lower-edge continuity check over the verified opening segment')
+    .toBeGreaterThanOrEqual(25);
+  expect(openingEdgeComparisons.every(({ bottomEdgeMae }) => bottomEdgeMae < 5), 'the lower edge should remain continuous during the opening segment')
     .toBeTruthy();
-  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-purple', '48');
-  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-blue', '45');
-  await expect(page.locator('#game-canvas')).toHaveAttribute('data-progress-yellow', '9');
+  await expect.poll(() => page.evaluate(() => window.__levelThreeWinObservation)).not.toBeNull();
+  const winObservation = await page.evaluate(() => window.__levelThreeWinObservation);
+  const sourceStateSamples = await page.evaluate(() => window.__levelThreeSourceStateSamples);
+  const sourceEndStateDirectory = new URL('../.research/events/level3-full-route/', import.meta.url);
+  await mkdir(sourceEndStateDirectory, { recursive: true });
+  await writeFile(new URL('browser-end-state.json', sourceEndStateDirectory), `${JSON.stringify({ winObservation, sourceStateSamples }, null, 2)}\n`);
+  console.log(`[level3-source-end-state] ${JSON.stringify({ winObservation, sourceStateSamples: sourceStateSamples.slice(-10) })}`);
+  await testInfo.attach('level3-source-end-state.json', {
+    body: JSON.stringify({ winObservation, sourceStateSamples }, null, 2),
+    contentType: 'application/json',
+  });
+  expect(winObservation.videoTime, 'Level 3 must not auto-win before the 23-second source clip ends')
+    .toBeGreaterThanOrEqual(22.9);
+  expect(winObservation.videoEnded).toBeTruthy();
+  expect(winObservation.progress).toEqual({ purple: '100', blue: '100', yellow: '100' });
+  await expect(page.locator('#live-status')).toHaveText('第 4 关开始', { timeout: 5_000 });
   expect(pageErrors).toEqual([]);
   const browserAlignment = {
-    source: 'User recording S5 Level 3 00:19.9-00:27.9, 60 fps, exact pixel match on crop x22 y162 554x724; lower 96 px fades into native bucket layer',
+    source: 'User recording S5 Level 3 00:19.9-00:42.9, 23 seconds at 60 fps; compare crop x22 y162 554x724; lower 96 px fades into native bucket layer',
     presentedFrameCount: presentedFrames.length,
     firstPresentedFrame: presentedFrames[0],
     lastPresentedFrame: presentedFrames.at(-1),
@@ -2549,6 +2589,9 @@ test('Level 3 首次真实拖动启动 480 帧源片回放，无遮挡区逐帧�
     pixelComparedFrameCount: comparison.length,
     changedPixels: comparison.reduce((total, { differentPixels }) => total + differentPixels, 0),
     comparedFrames: comparison,
+    openingEdgeMaeMax: Math.max(...openingEdgeComparisons.map(({ bottomEdgeMae }) => bottomEdgeMae)),
+    winObservation,
+    finalStatus: '第 4 关开始',
   };
   const browserAlignmentDirectory = new URL('../.research/events/level3-60fps/browser/', import.meta.url);
   await mkdir(browserAlignmentDirectory, { recursive: true });

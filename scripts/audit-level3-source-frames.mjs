@@ -6,9 +6,9 @@ import sharp from 'sharp';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [
-  sourceFramesDirectory = '.research/events/level3-60fps/source',
-  decodedVideoFramesDirectory = '.research/events/level3-60fps/asset-decoded',
-  outputPath = '.research/events/level3-60fps/level3-panel-frame-audit.json',
+  sourceFramesDirectory = '.research/events/level3-full-route/source-normalized',
+  decodedVideoFramesDirectory = '.research/events/level3-full-route/asset-decoded-full',
+  outputPath = '.research/events/level3-full-route/full-frame-audit.json',
 ] = process.argv.slice(2);
 
 const sourceDirectory = path.resolve(root, sourceFramesDirectory);
@@ -21,13 +21,13 @@ const listFrames = async (directory) => (await readdir(directory))
 
 const sourceFrames = await listFrames(sourceDirectory);
 const videoFrames = await listFrames(videoDirectory);
-if (sourceFrames.length !== 480 || videoFrames.length !== 480) {
-  throw new Error(`Expected 480 source and decoded video frames; got ${sourceFrames.length} and ${videoFrames.length}.`);
+if (sourceFrames.length < 480 || videoFrames.length !== sourceFrames.length) {
+  throw new Error(`Expected matching source/video sequences with at least 480 frames; got ${sourceFrames.length} and ${videoFrames.length}.`);
 }
 
 const crop = { left: 22, top: 162, width: 554, height: 820 };
 const differences = [];
-for (let index = 0; index < 480; index += 1) {
+for (let index = 0; index < sourceFrames.length; index += 1) {
   const expectedPath = path.join(sourceDirectory, frameName(index));
   const actualPath = path.join(videoDirectory, frameName(index));
   const [source, video] = await Promise.all([
@@ -65,7 +65,7 @@ for (let index = 0; index < 480; index += 1) {
 const ratios = differences.map(({ changedPixelRatio }) => changedPixelRatio).sort((left, right) => left - right);
 const percentile = (fraction) => ratios[Math.min(ratios.length - 1, Math.floor((ratios.length - 1) * fraction))];
 const report = {
-  source: 'User recording S5, Level 3 sequence 00:19.9-00:27.9 at 60 fps',
+  source: `User recording S5, Level 3 sequence 00:19.9-${(19.9 + (sourceFrames.length / 60)).toFixed(1)} at 60 fps`,
   sourceFramesDirectory,
   decodedVideoFramesDirectory,
   crop,
@@ -74,6 +74,8 @@ const report = {
   sourceFrameCount: sourceFrames.length,
   decodedVideoFrameCount: videoFrames.length,
   checkedFrameCount: differences.length,
+  frameRate: 60,
+  durationSeconds: sourceFrames.length / 60,
   changedPixelRatio: {
     min: ratios[0],
     median: percentile(0.5),
