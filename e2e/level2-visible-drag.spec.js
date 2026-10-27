@@ -55,7 +55,27 @@ test('Level 2 原作回放中可抓取可见槽位并继续拖动通关', async 
   await page.waitForFunction(() => {
     const source = document.querySelector('#level-two-source-gameplay-video');
     return !source.paused && source.currentTime >= 3.05;
-  }, null, { timeout: 5_000 });
+  }, null, { timeout: 5_000 }).catch(async (error) => {
+    const observed = await page.evaluate(() => {
+      const source = document.querySelector('#level-two-source-gameplay-video');
+      const canvas = document.querySelector('#game-canvas');
+      return {
+        currentTime: source.currentTime,
+        paused: source.paused,
+        readyState: source.readyState,
+        duration: source.duration,
+        status: canvas.dataset.gameStatus,
+        buckets: JSON.parse(canvas.dataset.levelTwoBuckets ?? '[]'),
+        progress: {
+          green: canvas.dataset.progressGreen,
+          red: canvas.dataset.progressRed,
+          yellow: canvas.dataset.progressYellow,
+        },
+        liveStatus: document.querySelector('#live-status')?.textContent,
+      };
+    });
+    throw new Error(`${error.message}; observed=${JSON.stringify(observed)}`);
+  });
   await page.screenshot({ path: testInfo.outputPath('level2-moving-green-slot.png') });
 
   // The point lies inside the green slot as rendered by the source video;

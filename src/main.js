@@ -14,8 +14,11 @@ import {
 } from './game.js';
 import {
   LEVEL_TWO_COLLECTION_ANNOUNCEMENTS,
+  LEVEL_TWO_YELLOW_ATLAS,
+  levelTwoRecordedBucketPosition,
   levelTwoSourceArrivalAt,
   levelTwoSourceProgressAt,
+  levelTwoYellowAtlasSource,
 } from './level-two-collection-profile.js';
 import { AudioEngine } from './audio.js';
 
@@ -54,6 +57,12 @@ const COLORS_3D = {
 
 const LEVEL_ONE_PILE_THEMES = {
   yellow: { light: '#fff000', mid: '#f2cf08', dark: '#a98706', deep: '#5b4200' },
+};
+
+const LEVEL_TWO_CAVITY_THEMES = {
+  green: [[0, '#398c30'], [0.2, '#286d1c'], [0.55, '#15500d'], [1, '#082207']],
+  yellow: [[0, '#9a7605'], [0.2, '#8a6709'], [0.55, '#5e4708'], [1, '#352906']],
+  red: [[0, '#9b2330'], [0.2, '#7b111c'], [0.55, '#430710'], [1, '#20040a']],
 };
 
 // Level 3 cell faces sampled from the supplied recording at 00:19.9, after
@@ -248,6 +257,8 @@ const levelTwoOpeningPanelImage = new Image();
 levelTwoOpeningPanelImage.src = '/assets/level2/level2-opening-panel.png';
 const levelTwoGameplayBackgroundImage = new Image();
 levelTwoGameplayBackgroundImage.src = '/assets/level2/level2-gameplay-background.png';
+const levelTwoYellowBucketAtlasImage = new Image();
+levelTwoYellowBucketAtlasImage.src = '/assets/level2/level2-yellow-bucket-atlas.png';
 const levelTwoSourceGameplayVideo = document.createElement('video');
 levelTwoSourceGameplayVideo.id = 'level-two-source-gameplay-video';
 levelTwoSourceGameplayVideo.src = '/assets/level2/level2-gameplay-source.mp4';
@@ -1451,37 +1462,6 @@ function drawPad() {
   if (config.layout === 'pipes') drawPipeTracks();
 }
 
-function levelTwoRecordedBucketPosition(color, sourceTime) {
-  const interpolate = (from, to, fraction) => from + ((to - from) * Math.max(0, Math.min(1, fraction)));
-  if (color === 'red') {
-    return sourceTime < 0.3
-      ? { x: 350, y: interpolate(733, 533, (sourceTime - 0.2) / 0.1) }
-      : { x: 350, y: 533 };
-  }
-  if (color === 'green') {
-    if (sourceTime < 2.6) return { x: 50, y: 733 };
-    if (sourceTime < 2.7) {
-      const lift = Math.max(0, Math.min(1, (sourceTime - 2.6) / 0.1));
-      return { x: 50, y: interpolate(733, 493, lift), height: interpolate(198, 238, lift) };
-    }
-    return { x: 50, y: 493, height: 238 };
-  }
-  if (color === 'yellow') {
-    if (sourceTime < 4.5) return { x: 151, y: 831 };
-    if (sourceTime < 4.9) {
-      return {
-        x: interpolate(151, 50, (sourceTime - 4.5) / 0.4),
-        y: interpolate(831, 520, (sourceTime - 4.5) / 0.4),
-      };
-    }
-    if (sourceTime < 5.5) return { x: 61, y: interpolate(520, 530, (sourceTime - 4.9) / 0.6) };
-    if (sourceTime < 6.5) return { x: 50, y: 530 };
-    if (sourceTime < 7.1) return { x: interpolate(50, 250, (sourceTime - 6.5) / 0.6), y: 530 };
-    return { x: 250, y: 530 };
-  }
-  return null;
-}
-
 function syncLevelTwoSourceBucketHitboxes(sourceTime) {
   for (const bucket of state.game.buckets) {
     if (state.dragging && state.game.activeBucketId === bucket.id) continue;
@@ -1615,6 +1595,28 @@ function drawBucket(bucket, lockedPreview = false) {
     ? bucket.segments
     : [{ x: 0, y: 0, width, height }];
   const composite = Boolean(bucket.segments?.length);
+  if (state.game.level === 2 && color === 'yellow' && !lockedPreview
+    && !state.levelTwoSourceTimeline
+    && levelTwoYellowBucketAtlasImage.complete
+    && levelTwoYellowBucketAtlasImage.naturalWidth > 0) {
+    const frame = levelTwoYellowAtlasSource(progress);
+    const { columns, tile } = LEVEL_TWO_YELLOW_ATLAS;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      levelTwoYellowBucketAtlasImage,
+      (frame.progress % columns) * tile.width,
+      Math.floor(frame.progress / columns) * tile.height,
+      tile.width,
+      tile.height,
+      x,
+      y,
+      width,
+      height,
+    );
+    ctx.restore();
+    return;
+  }
   ctx.save();
   if (state.game.level === 1 && bucket.levelOneExitProgress > 0) {
     const centerX = x + width / 2;
@@ -1694,8 +1696,11 @@ function drawBucket(bucket, lockedPreview = false) {
       purple: ['#11134f', '#101641', '#080d29'],
       blue: ['#08354d', '#082a40', '#061d31'],
     }[color] : null;
+    const levelTwoCavity = state.game.level === 2 ? LEVEL_TWO_CAVITY_THEMES[color] : null;
     ctx.fillStyle = gradient(0, insetY, 0, insetY + insetH, levelThreeCavity
       ? [[0, levelThreeCavity[0]], [0.2, levelThreeCavity[0]], [0.52, levelThreeCavity[1]], [1, levelThreeCavity[2]]]
+      : levelTwoCavity
+        ? levelTwoCavity
       : [[0, theme.deep], [0.2, theme.deep], [0.52, '#38271f'], [1, '#17191e']]);
     ctx.fill();
   }
@@ -1735,10 +1740,12 @@ function drawBucket(bucket, lockedPreview = false) {
       const levelTwoPacked = state.game.level === 2;
       const fragmentCount = state.game.level === 1
         ? Math.round(count * 1.45)
-        : Math.round(count * (levelTwoPacked ? 2.05 : 3.2));
+        : Math.round(count * (levelTwoPacked ? 1.65 : 3.2));
       const fillHeight = cavity.height * Math.pow(progress / 100, state.game.level === 1 ? 0.16 : 0.22);
       const levelOneRowStep = cavity.height / Math.max(slot.rows, Math.ceil(fragmentCount / slot.columns));
-      const pileColumns = levelTwoPacked ? Math.max(8, Math.floor(cavity.width / 10)) : 0;
+      const pileColumns = levelTwoPacked ? Math.max(8, Math.floor(cavity.width / 14)) : 0;
+      const pileRows = levelTwoPacked ? Math.max(5, Math.ceil(fragmentCount / pileColumns)) : 0;
+      const pileRowStep = levelTwoPacked ? cavity.height / pileRows : 0;
       const pieces = Array.from({ length: fragmentCount }, (_, index) => {
         const levelOnePacked = state.game.level === 1;
         const levelTwoRow = levelTwoPacked ? Math.floor(index / pileColumns) : 0;
@@ -1751,20 +1758,23 @@ function drawBucket(bucket, lockedPreview = false) {
         const rowStep = cavity.height / slot.rows;
         const size = levelOnePacked
           ? Math.min(17, columnStep, rowStep) * (0.94 + noise(index, 1) * 0.25)
-          : levelTwoPacked ? 8 + noise(index, 1) * 4.5 : 7 + noise(index, 1) * 6;
+          : levelTwoPacked ? 11 + noise(index, 1) * 5 : 7 + noise(index, 1) * 6;
         const heightOffset = noise(index, 3) ** 0.82 * fillHeight;
         const levelTwoMound = levelTwoPacked
-          ? (1 - Math.abs(((levelTwoColumn + 0.5) / pileColumns) * 2 - 1)) * Math.min(8, cavity.height * 0.12)
+          && levelTwoRow >= pileRows - 2
+          ? (1 - Math.abs(((levelTwoColumn + 0.5) / pileColumns) * 2 - 1)) * 3
           : 0;
         const x = levelOnePacked
           ? cavity.x + (column + 0.5) * columnStep + (noise(index, 2) - 0.5) * columnStep * 0.4
           : levelTwoPacked
-            ? cavity.x + (levelTwoColumn + 0.5) * columnStep + (noise(index, 2) - 0.5) * columnStep * 0.34
+            ? cavity.x + (levelTwoColumn + 0.5) * columnStep
+              + (levelTwoRow % 2) * columnStep * 0.46
+              + (noise(index, 2) - 0.5) * columnStep * 0.8
             : cavity.x + 4 + noise(index, 2) * (cavity.width - 8);
         const y = levelOnePacked
           ? cavity.y + (row + 0.5) * levelOneRowStep + (noise(index, 3) - 0.5) * levelOneRowStep * 0.4
           : levelTwoPacked
-            ? cavity.y + cavity.height - 4 - (levelTwoRow * 8.5) - levelTwoMound + (noise(index, 3) - 0.5) * 2.5
+            ? cavity.y + cavity.height - 4 - (levelTwoRow * pileRowStep) - levelTwoMound + (noise(index, 3) - 0.5) * 8
             : cavity.y + cavity.height - 4 - heightOffset;
         return {
           x,
