@@ -156,6 +156,30 @@ const LEVEL_ELEVEN_LOWER_PIXELS = [
   'RRRRRRBRRBRRRRRRRRRRRRRRRRBRRBRRRRRRRRRRRRRRRRRBRRBRRRRR',
 ];
 
+// Cell-center differences between the clean S5 Level 11 upper board at
+// 05:23.8 and the settled source actions at 05:24.6 / 05:26.8. These two
+// observed purple-tray sweeps each remove a mixed-color region; the recording
+// hides the player's touch, so only these two region masks are source-backed.
+const LEVEL_ELEVEN_FIRST_PURPLE_SWEEP = [
+  '00000000000000000000000000011110000000001111110000000000',
+  '00000000000000000000000000000111111111111111100000000000',
+  '00000000000000000000000000000011111111111111000000000000',
+  '00000000000000000000000000000001111111111110000000000000',
+  '00000000000000000000000000000000111111111000000000000000',
+  '00000000000000000000000000000000001111110000000000000000',
+  '00000000000000000000000000000000001111100000000000000000',
+  '00000000000000000000000000000000000001000000000000000000',
+];
+
+const LEVEL_ELEVEN_SECOND_PURPLE_SWEEP = [
+  '00000011101111111111111111100000000000000000000000000000',
+  '00000000000011111111111111111000000000000000000000000000',
+  '00000000000001111111111111111000000000000000000000000000',
+  '00000000000000111111111111100000000000000000000000000000',
+  '00000000000000011111111111000000000000000000000000000000',
+  '00000000000000000011110100000000010000000000000000000000',
+];
+
 // Sampled at each cell center from the clean Level 13 frame at 00:06:26.
 // Hue and brightness separate the pink candy from the dark brown outline.
 const LEVEL_THIRTEEN_PIXELS = [
@@ -636,6 +660,7 @@ const levels = {
   },
   11: {
     layout: 'double',
+    acceptMixedColorCells: true,
     frame: { x: 27, y: 165, width: 541, height: 953 },
     panels: [
       { frame: { x: 27, y: 165, width: 541, height: 470 }, wall: { x: 47, y: 182, width: 503, height: 160 }, grid: { x: 64, y: 193, width: 462, height: 142, cols: 56, rows: 17 }, pad: { x: 52, y: 367, cols: 6, rows: 1, cellWidth: 81, cellHeight: 81, gap: 1 } },
@@ -661,10 +686,21 @@ const levels = {
     boards: [
       { id: 'upper', rect: { x: 64, y: 193, width: 462, height: 142, cols: 56, rows: 17 }, paint(column, row) {
         const pixel = LEVEL_ELEVEN_UPPER_PIXELS[row]?.[column];
+        const sourceSweepBucket = LEVEL_ELEVEN_FIRST_PURPLE_SWEEP[row]?.[column] === '1'
+          ? 'purple-upper-right'
+          : LEVEL_ELEVEN_SECOND_PURPLE_SWEEP[row]?.[column] === '1'
+            ? 'purple-upper-left'
+            : null;
+        if (sourceSweepBucket) {
+          return { color: pixel === 'Y' ? 'yellow' : 'purple', targetBucketId: sourceSweepBucket };
+        }
         if (pixel === 'Y') return { color: 'yellow', targetBucketId: column < 28 ? 'yellow-left' : 'yellow-right' };
         if (pixel === 'P') {
           const buckets = ['purple-left-bottom', 'purple-upper-left', 'purple-upper-right', 'purple-lower-left', 'purple-lower-right', 'purple-right-bottom'];
-          return { color: 'purple', targetBucketId: buckets[Math.min(5, Math.floor((column * buckets.length) / 56))] };
+          let targetBucketId = buckets[Math.min(5, Math.floor((column * buckets.length) / 56))];
+          if (targetBucketId === 'purple-upper-left') targetBucketId = 'yellow-left';
+          if (targetBucketId === 'purple-upper-right') targetBucketId = 'yellow-right';
+          return { color: 'purple', targetBucketId };
         }
         return null;
       } },
@@ -895,6 +931,11 @@ export function getBucketAt(state, x, y) {
   return [...state.buckets].reverse().find((bucket) => bucket.visible && bucketContains(bucket, x, y)) ?? null;
 }
 
+function cellMatchesBucket(state, bucket, cell) {
+  return cell?.targetBucketId === bucket.id
+    && (state.config.acceptMixedColorCells || cell.color === bucket.color);
+}
+
 export function collectAt(state, bucketId, x, y) {
   const bucket = getBucket(state, bucketId);
   if (!bucket || !bucket.visible) return [];
@@ -902,7 +943,7 @@ export function collectAt(state, bucketId, x, y) {
   const found = [];
   for (let index = 0; index < state.grid.length; index += 1) {
     const cell = state.grid[index];
-    if (!cell || cell.color !== bucket.color || cell.targetBucketId !== bucket.id) continue;
+    if (!cellMatchesBucket(state, bucket, cell)) continue;
     if (!bucketContains(bucket, cell.x, cell.y)) continue;
     state.grid[index] = null;
     state.collected[cell.color] += 1;
@@ -926,7 +967,7 @@ export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY, ac
   for (let index = 0; index < state.grid.length; index += 1) {
     if (found.length >= limit) break;
     const cell = state.grid[index];
-    if (!cell || cell.targetBucketId !== bucket.id || cell.color !== bucket.color || !acceptCell(cell)) continue;
+    if (!cellMatchesBucket(state, bucket, cell) || !acceptCell(cell)) continue;
     state.grid[index] = null;
     state.collected[cell.color] += 1;
     state.bucketCollected[bucket.id] += 1;

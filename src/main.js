@@ -2216,7 +2216,7 @@ function addCollectedEffects(cells, now, bucket, { announce = true, playSound = 
           y: cell.y + (random(2) - 0.5) * 12,
           targetX: bucket.x + bucket.width * (0.12 + random(3) * 0.76),
           targetY: bucket.y + bucket.height * (0.12 + random(4) * 0.2),
-          color: cell.color,
+          color: state.game.config.acceptMixedColorCells ? bucket.color : cell.color,
           bornAt: now,
           duration: arrivalAt === null
             ? 650 + random(5) * 600
@@ -2231,7 +2231,12 @@ function addCollectedEffects(cells, now, bucket, { announce = true, playSound = 
   if (cells.length) {
     state.moveCollected += cells.length;
     if (playSound) audio.cue('collect');
-    if (announce) liveStatus.textContent = `已收集 ${cells.length} 个${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket)}%`;
+    if (announce) {
+      const summary = state.game.config.acceptMixedColorCells
+        ? `已收集 ${cells.length} 个像素块到${colorName(bucket.color)}收集槽`
+        : `已收集 ${cells.length} 个${colorName(bucket.color)}像素块`;
+      liveStatus.textContent = `${summary}，进度 ${getProgress(state.game, bucket)}%`;
+    }
   }
 }
 
@@ -3332,7 +3337,7 @@ function activateSelectedBucket(bucket, now) {
   if (!bucket) return false;
   const availableCells = state.game.grid.filter((cell) => cell
     && cell.targetBucketId === bucket.id
-    && cell.color === bucket.color);
+    && (state.game.config.acceptMixedColorCells || cell.color === bucket.color));
   if (!availableCells.length) {
     liveStatus.textContent = `这个${colorName(bucket.color)}收集槽没有可填充的像素`;
     return true;
@@ -4496,7 +4501,9 @@ function onPointerUp(event) {
     if (acceptedLevelThreeSource) {
       // The recorded source track continues the exact, observed first move.
     } else if (levelTwoDocked) {
-      liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
+      liveStatus.textContent = state.game.config.acceptMixedColorCells
+        ? `正在填充${colorName(bucket.color)}收集槽，进度 ${getProgress(state.game, bucket.id)}%`
+        : `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
     } else if (state.game.level === 2) {
       state.levelTwoInteractive = true;
       liveStatus.textContent = `已移动${colorName(bucket.color)}收集槽`;
@@ -4505,7 +4512,9 @@ function onPointerUp(event) {
       bucket.y = state.dragOrigin.y;
       state.game.invalidAt = { ...point, at: performance.now() };
       audio.cue('invalid');
-      liveStatus.textContent = `没有收集到${colorName(bucket.color)}像素块，试着拖过同色区域`;
+      liveStatus.textContent = state.game.config.acceptMixedColorCells
+        ? '没有收集到像素块，试着扫过对应图案区域'
+        : `没有收集到${colorName(bucket.color)}像素块，试着拖过同色区域`;
     } else if (getProgress(state.game, bucket.id) >= 100) {
       bucket.completeAt = performance.now();
     }

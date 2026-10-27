@@ -4330,6 +4330,83 @@ test('Level 11 上下棋盘开局与录屏 05:23 源帧逐像素一致', async (
   }
 });
 
+test('Level 11 前两次紫槽真实拖动会收集原片记录的混色区域', async ({ page }) => {
+  test.setTimeout(30_000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?previewLevel=11');
+  const initialState = createGameState(11);
+  const sourceSweeps = [
+    { bucketId: 'purple-upper-right', start: { x: 339, y: 470 }, sweepEndX: 480, count: 73, yellow: 64, purple: 9 },
+    { bucketId: 'purple-upper-left', start: { x: 257, y: 470 }, sweepEndX: 360, count: 83, yellow: 74, purple: 9 },
+  ];
+
+  const canvas = await page.locator('#game-canvas').boundingBox();
+  if (!canvas) throw new Error('游戏画布没有显示');
+  const pointerAt = (x, y) => ({
+    x: canvas.x + (x / 597) * canvas.width,
+    y: canvas.y + (y / 1296) * canvas.height,
+  });
+  const moveSegment = async (from, to, durationMs = 220) => {
+    const start = pointerAt(from.x, from.y);
+    const end = pointerAt(to.x, to.y);
+    const steps = Math.max(1, Math.round(durationMs / (1_000 / 60)));
+    for (let step = 1; step <= steps; step += 1) {
+      await page.mouse.move(
+        start.x + ((end.x - start.x) * step) / steps,
+        start.y + ((end.y - start.y) * step) / steps,
+      );
+      await page.waitForTimeout(16);
+    }
+  };
+
+  for (const [index, sweep] of sourceSweeps.entries()) {
+    const cells = initialState.grid.filter((cell) => cell?.targetBucketId === sweep.bucketId && cell.boardId === 'upper');
+    const colors = cells.reduce((counts, cell) => {
+      counts[cell.color] = (counts[cell.color] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(cells, `${sweep.bucketId} 应还原原片的像素目标组大小`).toHaveLength(sweep.count);
+    expect(colors).toEqual({ yellow: sweep.yellow, purple: sweep.purple });
+
+    const start = sweep.start;
+    await page.mouse.move(...Object.values(pointerAt(start.x, start.y)));
+    await page.mouse.down();
+    await moveSegment(start, { x: 350, y: 224 });
+    await moveSegment({ x: 350, y: 224 }, { x: 90, y: 224 });
+    await moveSegment({ x: 90, y: 224 }, { x: sweep.sweepEndX, y: 224 });
+    await moveSegment({ x: sweep.sweepEndX, y: 224 }, start);
+    await page.mouse.up();
+    await expect(page.locator('#live-status')).toContainText('进度 100%');
+
+    await page.waitForTimeout(1_400);
+    const remainingSamples = await page.evaluate((targetCells) => {
+      const context = document.querySelector('#game-canvas').getContext('2d');
+      return targetCells.map(({ x, y }) => [...context.getImageData(Math.round(x), Math.round(y), 1, 1).data].slice(0, 3));
+    }, cells);
+    const uncleared = remainingSamples.filter(([red, green, blue]) => (
+      red > 90 || green < 95 || blue < 160
+    ));
+    expect(uncleared, `${sweep.bucketId} 的混色目标区域必须在真实拖动后清空`).toEqual([]);
+
+    if (index === 0) {
+      const untouched = initialState.grid.find((cell) => (
+        cell?.boardId === 'upper' && cell.targetBucketId !== sweep.bucketId && cell.row === 0 && cell.column === 0
+      ));
+      expect(untouched).toBeDefined();
+      const unchangedPixel = await page.evaluate(({ x, y }) => {
+        const context = document.querySelector('#game-canvas').getContext('2d');
+        return [...context.getImageData(Math.round(x), Math.round(y), 1, 1).data].slice(0, 3);
+      }, untouched);
+      expect(unchangedPixel[0]).toBeGreaterThan(170);
+      expect(unchangedPixel[1]).toBeGreaterThan(150);
+      expect(unchangedPixel[2]).toBeLessThan(120);
+    }
+  }
+
+  expect(errors).toEqual([]);
+});
+
 test('Level 11 紫槽真实拖动时保留未动源像素并维持逐帧预算', async ({ page }) => {
   test.setTimeout(30_000);
   await page.addInitScript(() => {
@@ -4419,7 +4496,7 @@ test('Level 11 紫槽真实拖动时保留未动源像素并维持逐帧预算',
   await page.waitForTimeout(900);
   const initialState = createGameState(11);
   const clearedCell = initialState.grid.find((cell) => (
-    cell?.targetBucketId === 'purple-lower-left' && cell.row === 1
+    cell?.boardId === 'upper' && cell.targetBucketId === 'purple-lower-left'
   ));
   expect(clearedCell).toBeDefined();
   const clearedPixel = await page.evaluate(({ x, y }) => {
