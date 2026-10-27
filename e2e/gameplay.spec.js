@@ -3405,10 +3405,13 @@ test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', asy
   ))).toBeGreaterThanOrEqual(73);
   await captureSourceAlignedFrame(355, 'source-frame-0355-red-100-yellow-73');
 
-  await waitUntilPageTime(yellowGestureStartedAt + 1_900);
-  await captureSourceAlignedFrame(391, 'source-frame-0391-yellow-resting-left');
+  // Begin the second yellow drag just before the source's 6.5 s reposition
+  // point. Holding the real tray keeps the source presentation from moving it
+  // automatically while still letting the matching frame be captured.
+  await waitUntilPageTime(yellowGestureStartedAt + 1_800);
   await page.mouse.move(yellowRegrab.x, yellowRegrab.y);
   await page.mouse.down();
+  await captureSourceAlignedFrame(391, 'source-frame-0391-yellow-resting-left');
   await moveLeg(yellowRegrab, yellowRight, 600);
   await captureSourceAlignedFrame(427, 'source-frame-0427-yellow-moving-right');
   await page.mouse.up();

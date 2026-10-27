@@ -2765,6 +2765,20 @@ function advanceLevelTwoSourcePlayback(now) {
   }
   const duration = Number.isFinite(video.duration) ? video.duration : 8.617;
   const sourceTime = Math.max(0, 0.2 + ((now - timeline.startedAt) / 1_000));
+  const pointerMoveGraceMs = 500;
+  const hasActiveGesture = (id) => state.dragging
+    && state.game.activeBucketId === id
+    && (state.dragDistance >= 4 || now - state.dragStartedAt < pointerMoveGraceMs);
+  const green = getBucket(state.game, 'green');
+  const yellow = getBucket(state.game, 'yellow');
+  // The recording contains later player gestures. Stop presenting it before
+  // an unrequested gesture would move a tray or erase its pixels on screen.
+  if ((sourceTime >= 2.6 && !green.sourceCollectionActive && !hasActiveGesture('green'))
+      || (sourceTime >= 4.5 && !yellow.sourceCollectionActive && !hasActiveGesture('yellow'))
+      || (sourceTime >= 6.5 && !timeline.yellowRepositionConfirmed && !hasActiveGesture('yellow'))) {
+    leaveLevelTwoSourceSequence();
+    return;
+  }
   const targetTime = Math.min(duration - (1 / 60), sourceTime);
   syncLevelTwoSourceAudio(sourceTime, state.game.status !== 'lost');
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
@@ -3940,6 +3954,7 @@ function dockLevelTwoBucket(bucket, startedAt) {
   const atPlayableDock = atWallEdge && hasPixelsAbove;
   if (!atSourceDock && !atYellowRepositionDock && !atPlayableDock) return false;
   if (state.levelTwoSourceTimeline && !atSourceDock && !atYellowRepositionDock) leaveLevelTwoSourceSequence();
+  if (state.levelTwoSourceTimeline && atYellowRepositionDock) state.levelTwoSourceTimeline.yellowRepositionConfirmed = true;
   if (!bucket.sourceCollectionActive) {
     const firstBucketMove = state.game.moves === 0;
     state.game.moves += 1;

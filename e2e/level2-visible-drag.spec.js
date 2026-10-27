@@ -42,10 +42,16 @@ test('Level 2 原作回放中可抓取可见槽位并继续拖动通关', async 
   await mkdir(evidenceDirectory, { recursive: true });
   await page.goto('/?previewLevel=2');
 
-  // Red docks first and starts the recorded Level 2 sequence. Around source
-  // time 3 s, the green L slot is visibly at x=50, y=493.
+  // Red docks first and starts the recorded Level 2 sequence. Move the green
+  // tray with a real pointer during its source action window, before replay
+  // would otherwise move this untouched tray on its own.
   await dragCanvasPath(page, { x: 450, y: 750 }, { x: 450, y: 550 }, 160);
   const sourceVideo = page.locator('#level-two-source-gameplay-video');
+  await page.waitForFunction(() => {
+    const source = document.querySelector('#level-two-source-gameplay-video');
+    return !source.paused && source.currentTime >= 2.35 && source.currentTime < 2.55;
+  }, null, { timeout: 5_000 });
+  await dragCanvasPath(page, { x: 100, y: 750 }, { x: 100, y: 510 }, 120);
   await page.waitForFunction(() => {
     const source = document.querySelector('#level-two-source-gameplay-video');
     return !source.paused && source.currentTime >= 3.05;
