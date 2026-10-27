@@ -52,6 +52,10 @@ const levelFourBoardCellsPixels = await sharp(fileURLToPath(new URL('../assets/l
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true });
+const levelFourOpeningPanelPixels = await sharp(fileURLToPath(new URL('../assets/level4/level4-opening-panel.png', import.meta.url)))
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
 const levelFiveBoardPixels = await sharp(fileURLToPath(new URL('../assets/level5/level5-board.png', import.meta.url)))
   .ensureAlpha()
   .raw()
@@ -2701,11 +2705,35 @@ test('Level 3 首拖播放原作混合音轨并与视频同步，设置暂停后
     .toBeLessThan(0.08);
 });
 
-test('Level 4 开局未被红槽与阴影遮挡的棋盘像素与录屏一致', async ({ page }) => {
+test('Level 4 开局面板逐像素一致，首次实际重排后棋盘仍用源像素', async ({ page }) => {
   await page.goto('/?previewLevel=4');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const screenshot = await page.screenshot();
-  const actual = await sharp(screenshot)
+  await expect(page.locator('#live-status')).toHaveText('第 4 关开始');
+  const openingScreenshot = await page.screenshot();
+  const fullPanel = await sharp(openingScreenshot)
+    .extract({ left: 17, top: 285, width: 563, height: 706 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const panelDiff = pixelmatch(
+    levelFourOpeningPanelPixels.data,
+    fullPanel.data,
+    Buffer.alloc(fullPanel.data.length),
+    fullPanel.info.width,
+    fullPanel.info.height,
+    { threshold: 0.16, includeAA: false },
+  );
+  expect(panelDiff, `Level 4 opening panel differs at ${panelDiff} pixels`).toBe(0);
+
+  await page.mouse.move(133, 720);
+  await page.mouse.down();
+  await page.mouse.move(151, 720, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => page.locator('#game-canvas').evaluate((canvas) => (
+    JSON.parse(canvas.dataset.levelFourBuckets).find((bucket) => bucket.id === 'blue-left')?.x
+  ))).toBeCloseTo(68, 0);
+  const liveScreenshot = await page.screenshot();
+  const actual = await sharp(liveScreenshot)
     .extract({ left: 61, top: 317, width: 474, height: 314 })
     .ensureAlpha()
     .raw()

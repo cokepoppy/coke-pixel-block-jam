@@ -1,7 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import pixelmatch from 'pixelmatch';
+import sharp from 'sharp';
 
 const canvasSize = { width: 597, height: 1296 };
+const levelFourSourcePanel = await sharp(fileURLToPath(new URL('../assets/level4/level4-opening-panel.png', import.meta.url)))
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
 
 async function readLevelFourState(page) {
   return page.locator('#game-canvas').evaluate((canvas) => ({
@@ -61,6 +68,24 @@ test('Level 4 可以在墙下整理收集槽，零进度移动不会回弹或清
     expect(movedBucket.y).toBeCloseTo(move.to.y, 1);
     expect(after.remainingCells).toBe(before.remainingCells);
     expect(after.buckets.every((bucket) => bucket.progress === 0)).toBe(true);
+    if (move.id === 'blue-left') {
+      const screenshot = await page.screenshot({ path: `${recordingDir}/after-first-real-drag.png` });
+      const panel = await sharp(screenshot)
+        .extract({ left: 17, top: 285, width: 563, height: 706 })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const diff = pixelmatch(
+        levelFourSourcePanel.data,
+        panel.data,
+        Buffer.alloc(panel.data.length),
+        panel.info.width,
+        panel.info.height,
+        { threshold: 0.16, includeAA: false },
+      );
+      expect(diff, 'the source opening panel must yield to live canvas rendering after a real tray drag')
+        .toBeGreaterThan(0);
+    }
   }
 
   await page.screenshot({ path: `${recordingDir}/after-tray-rearrangement.png` });

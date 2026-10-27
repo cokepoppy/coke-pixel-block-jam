@@ -38,6 +38,7 @@ const requestedSplashPreview = query.get('previewSplash') === '1';
 const loadingScreenDurationMs = 1783;
 const previewLevelOneAssetGate = hasPreviewLevel && requestedPreviewLevel === 1 && !requestedSplashPreview;
 const previewLevelThreeAssetGate = hasPreviewLevel && requestedPreviewLevel === 3 && !requestedSplashPreview;
+const previewLevelFourAssetGate = hasPreviewLevel && requestedPreviewLevel === 4 && !requestedSplashPreview;
 const levelTwoWinSettleDurationMs = 900;
 const levelTwoTransitionDurationMs = 1200;
 const LEVEL_THREE_SOURCE_DURATION_SECONDS = 23;
@@ -98,7 +99,7 @@ const state = {
   // panel and hand clip are decoded. Otherwise the first paint shows the
   // procedural buckets, then swaps to the source frame and can look like a
   // yellow-slot flash during startup.
-  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate || previewLevelThreeAssetGate,
+  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate || previewLevelThreeAssetGate || previewLevelFourAssetGate,
   loadingPreview: requestedSplashPreview,
   loadingStartedAt: performance.now(),
   lastFrameAt: performance.now(),
@@ -124,6 +125,7 @@ const state = {
   levelOneSourceTimeline: null,
   levelTwoSourceTimeline: null,
   levelTwoInteractive: false,
+  levelFourSourcePanelReleased: false,
   levelThreeSourceTimeline: null,
   levelEightSourceTimeline: null,
   levelEightSourceCandidate: null,
@@ -219,7 +221,7 @@ for (const eventName of ['pause', 'seeking', 'waiting', 'stalled']) {
   });
 }
 
-function initialLevelOnePanelReady() {
+function initialPreviewAssetsReady() {
   if (initialLevel === 1) {
     if (!levelOneOpeningPanelImage.complete || levelOneOpeningPanelImage.naturalWidth === 0) return false;
     return prefersReducedMotion.matches
@@ -232,6 +234,12 @@ function initialLevelOnePanelReady() {
       && levelThreeOpeningPanelImage.naturalWidth > 0
       && levelThreeSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
       && levelThreeSourceAudio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }
+  if (initialLevel === 4) {
+    return levelFourOpeningPanelImage.complete
+      && levelFourOpeningPanelImage.naturalWidth > 0
+      && levelFourFrameOverlayImage.complete
+      && levelFourFrameOverlayImage.naturalWidth > 0;
   }
   return true;
 }
@@ -464,6 +472,10 @@ const levelThreeBoardImage = new Image();
 levelThreeBoardImage.src = '/assets/level3/level3-board.png';
 const levelFourBoardCellsImage = new Image();
 levelFourBoardCellsImage.src = '/assets/level4/level4-board-cells.png';
+const levelFourOpeningPanelImage = new Image();
+levelFourOpeningPanelImage.src = '/assets/level4/level4-opening-panel.png';
+const levelFourFrameOverlayImage = new Image();
+levelFourFrameOverlayImage.src = '/assets/level4/level4-frame-overlay.png';
 const levelFiveBoardImage = new Image();
 levelFiveBoardImage.src = '/assets/level5/level5-board.png';
 const levelSixBoardImage = new Image();
@@ -4088,7 +4100,21 @@ function drawScene(now) {
   }
   drawBackground();
   drawHeader();
-  if (!showLevelTwoLivePanel) drawGameFrame();
+  const showLevelFourOpeningPanel = state.game.level === 4
+    && !state.levelFourSourcePanelReleased
+    && levelFourOpeningPanelImage.complete
+    && levelFourOpeningPanelImage.naturalWidth > 0;
+  const showLevelFourSourceFrame = state.game.level === 4
+    && state.levelFourSourcePanelReleased
+    && levelFourFrameOverlayImage.complete
+    && levelFourFrameOverlayImage.naturalWidth > 0;
+  if (!showLevelTwoLivePanel && !showLevelFourOpeningPanel && !showLevelFourSourceFrame) drawGameFrame();
+  if (showLevelFourSourceFrame) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelFourFrameOverlayImage, 17, 285);
+    ctx.restore();
+  }
   const showSourceOpeningPanel = state.game.level === 1
     && !state.game.started
     && levelOneOpeningPanelImage.complete
@@ -4195,6 +4221,11 @@ function drawScene(now) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(levelTwoOpeningPanelImage, 17, 310);
+    ctx.restore();
+  } else if (showLevelFourOpeningPanel) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelFourOpeningPanelImage, 17, 285);
     ctx.restore();
   } else if (showLevelThreeSourcePanel) {
     // The source clip covers this wall. Skip rebuilding its 1,344 cells on
@@ -4495,6 +4526,7 @@ function onPointerMove(event) {
     audio.cue('drag');
   }
   if (state.dragDistance >= 2) {
+    if (state.game.level === 4) state.levelFourSourcePanelReleased = true;
     const next = clampBucketPosition(bucket, point.x - state.dragOffset.x, point.y - state.dragOffset.y);
     if (state.game.level === 1) {
       const wallBottom = state.game.gridRect.y + state.game.gridRect.height;
@@ -4543,6 +4575,7 @@ function restartCurrentLevel() {
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
   state.levelTwoInteractive = false;
+  state.levelFourSourcePanelReleased = false;
   state.levelOneWonPending = false;
   state.game = createGameState(state.game.level);
   state.endDialogShown = false;
@@ -4574,6 +4607,7 @@ function advanceToNextLevel() {
   state.levelOneSourceTimeline = null;
   state.levelTwoSourceTimeline = null;
   state.levelTwoInteractive = false;
+  state.levelFourSourcePanelReleased = false;
   state.levelOneWonPending = false;
   state.game = startNextLevel(state.game);
   state.endDialogShown = false;
@@ -4981,10 +5015,10 @@ function setCanvasDensity() {
 function frame(now) {
   const delta = Math.min(0.05, Math.max(0, (now - state.lastFrameAt) / 1000));
   state.lastFrameAt = now;
-  const minimumLoadingMs = previewLevelOneAssetGate ? 0 : loadingScreenDurationMs;
+  const minimumLoadingMs = previewLevelOneAssetGate || previewLevelFourAssetGate ? 0 : loadingScreenDurationMs;
   if (state.loading && !state.loadingPreview
       && now - state.loadingStartedAt >= minimumLoadingMs
-      && initialLevelOnePanelReady()) {
+      && initialPreviewAssetsReady()) {
     state.loading = false;
     liveStatus.textContent = `第 ${initialLevel} 关开始`;
     canvas.setAttribute('aria-label', '拖动收集槽收集彩色像素方块');
