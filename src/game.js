@@ -427,16 +427,13 @@ const levels = {
     ],
     paint(column, row) {
       if (row < 12) {
-        if (column < 12) return { color: 'red', targetBucketId: 'red-top' };
+        if (column < 12) return { color: 'red', targetBucketId: 'red-right' };
         if (column < 25) return { color: 'green', targetBucketId: 'green-bottom' };
-        return { color: 'red', targetBucketId: 'red-right' };
+        return { color: 'red', targetBucketId: 'red-top' };
       }
       if (column < 12) return { color: 'yellow', targetBucketId: 'yellow-bottom' };
       if (column < 25) return null;
-      return {
-        color: 'blue',
-        targetBucketId: column < 31 ? 'blue-left' : 'blue-right',
-      };
+      return { color: 'blue', targetBucketId: row < 18 ? 'blue-left' : 'blue-right' };
     },
   },
   5: {
