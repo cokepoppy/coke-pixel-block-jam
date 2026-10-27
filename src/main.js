@@ -65,6 +65,17 @@ const LEVEL_TWO_CAVITY_THEMES = {
   red: [[0, '#9b2330'], [0.2, '#7b111c'], [0.55, '#430710'], [1, '#20040a']],
 };
 
+const LEVEL_FOUR_BUCKET_THEMES = {
+  blue: { light: '#7168ff', mid: '#4136f5', dark: '#2b1dce', deep: '#130b82' },
+};
+
+const LEVEL_FOUR_CAVITY_THEMES = {
+  green: [[0, '#174d1c'], [0.2, '#123f17'], [0.55, '#0b2d11'], [1, '#07190b']],
+  yellow: [[0, '#423c00'], [0.2, '#3b3500'], [0.55, '#272400'], [1, '#111000']],
+  red: [[0, '#421010'], [0.2, '#3c0e0e'], [0.55, '#29090a'], [1, '#150607']],
+  blue: [[0, '#001538'], [0.2, '#001332'], [0.55, '#000b24'], [1, '#000516']],
+};
+
 // Level 3 cell faces sampled from the supplied recording at 00:19.9, after
 // scaling its 1206 x 2622 frame to the 597 x 1296 game viewport.
 const LEVEL_PIXEL_THEMES = {
@@ -1188,33 +1199,24 @@ function drawPixelWall() {
     }
     if (state.game.level === 4 && state.game.moves === 0
       && levelFourBoardCellsImage.complete && levelFourBoardCellsImage.naturalWidth > 0) {
-      const startsAtSourcePositions = state.game.buckets.every((bucket) => {
-        const source = state.game.config.buckets.find((candidate) => candidate.id === bucket.id);
-        return source && bucket.x === source.x && bucket.y === source.y;
-      });
-      if (startsAtSourcePositions) {
-        roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
-        ctx.fillStyle = state.game.config.gridBackground ?? '#17436a';
-        ctx.fill();
-        ctx.save();
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(levelFourBoardCellsImage, x, y, width, height);
-        ctx.restore();
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(levelFourBoardCellsImage, x, y, width, height);
+      ctx.restore();
 
-        for (let column = 12; column < 25; column += 1) {
-          const cell = state.game.grid[11 * cols + column];
-          if (!cell) continue;
-          const px = x + Math.round(column * width / cols);
-          const py = y + Math.round(11 * height / rows);
-          const cellWidth = x + Math.round((column + 1) * width / cols) - px;
-          const cellHeight = y + Math.round(12 * height / rows) - py;
-          drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column);
-          drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 1);
-          drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 2);
-          drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 3);
-        }
-        continue;
+      for (let column = 12; column < 25; column += 1) {
+        const cell = state.game.grid[11 * cols + column];
+        if (!cell) continue;
+        const px = x + Math.round(column * width / cols);
+        const py = y + Math.round(11 * height / rows);
+        const cellWidth = x + Math.round((column + 1) * width / cols) - px;
+        const cellHeight = y + Math.round(12 * height / rows) - py;
+        drawPixelCell(px + 0.4, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column);
+        drawPixelCell(px + cellWidth * 0.52, py + 0.4, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 1);
+        drawPixelCell(px + 0.4, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 2);
+        drawPixelCell(px + cellWidth * 0.52, py + cellHeight * 0.52, cellWidth * 0.48, cellHeight * 0.48, cell.color, 11 * cols + column + 3);
       }
+      continue;
     }
     if (state.game.level === 5 && levelFiveBoardImage.complete && levelFiveBoardImage.naturalWidth > 0) {
       roundedRect(x - 4, y - 3, width + 8, height + 7, 19);
@@ -1652,6 +1654,8 @@ function drawBucket(bucket, lockedPreview = false) {
   const { color, x, y, width, height } = bucket;
   const theme = state.game.level === 8
     ? LEVEL_PIXEL_THEMES[8][color] ?? COLORS_3D[color]
+    : state.game.level === 4
+      ? LEVEL_FOUR_BUCKET_THEMES[color] ?? COLORS_3D[color]
     : COLORS_3D[color];
   const progress = getProgress(state.game, bucket);
   const segments = bucket.segments?.length
@@ -1759,12 +1763,15 @@ function drawBucket(bucket, lockedPreview = false) {
       purple: ['#11134f', '#101641', '#080d29'],
       blue: ['#08354d', '#082a40', '#061d31'],
     }[color] : null;
+    const levelFourCavity = state.game.level === 4 ? LEVEL_FOUR_CAVITY_THEMES[color] : null;
     const levelTwoCavity = state.game.level === 2 ? LEVEL_TWO_CAVITY_THEMES[color] : null;
     ctx.fillStyle = gradient(0, insetY, 0, insetY + insetH, levelThreeCavity
       ? [[0, levelThreeCavity[0]], [0.2, levelThreeCavity[0]], [0.52, levelThreeCavity[1]], [1, levelThreeCavity[2]]]
-      : levelTwoCavity
-        ? levelTwoCavity
-      : [[0, theme.deep], [0.2, theme.deep], [0.52, '#38271f'], [1, '#17191e']]);
+      : levelFourCavity
+        ? levelFourCavity
+        : levelTwoCavity
+          ? levelTwoCavity
+          : [[0, theme.deep], [0.2, theme.deep], [0.52, '#38271f'], [1, '#17191e']]);
     ctx.fill();
   }
 
@@ -1880,7 +1887,21 @@ function drawBucket(bucket, lockedPreview = false) {
     ctx.restore();
   }
 
-  if (!lockedPreview && !sourcePileUsed) {
+  if (!lockedPreview && !sourcePileUsed && state.game.level === 4) {
+    const labelWidth = Math.max(48, Math.min(68, width * 0.38));
+    const labelHeight = 29;
+    const labelX = x + width - labelWidth - 2;
+    const labelY = y + 3;
+    roundedRect(labelX, labelY, labelWidth, labelHeight, Math.min(10, labelHeight * 0.35));
+    ctx.fillStyle = gradient(labelX, labelY, labelX, labelY + labelHeight, [
+      [0, theme.light], [0.52, theme.mid], [1, theme.dark],
+    ]);
+    ctx.fill();
+    drawText(`${progress}%`, x + width - 8, y + 26, {
+      size: Math.max(18, Math.min(26, Math.min(width, height) * 0.16)),
+      align: 'right', fill: '#fff', stroke: '#1a1b24', lineWidth: 6, shadow: '#10131b', shadowY: 1,
+    });
+  } else if (!lockedPreview && !sourcePileUsed) {
     const firstLevelYellowProgress = state.game.level === 1 && color === 'yellow' && progress > 0 && progress < 100;
     const label = firstLevelYellowProgress ? {
       x: width - 24,
@@ -4045,6 +4066,15 @@ function drawScene(now) {
     canvas.dataset.progressBlue = String(getProgress(state.game, 'blue'));
     canvas.dataset.progressYellow = String(getProgress(state.game, 'yellow'));
   }
+  if (state.game.level === 4) {
+    canvas.dataset.levelFourBuckets = JSON.stringify(state.game.buckets.map(({ id, x, y }) => ({
+      id,
+      x,
+      y,
+      progress: getProgress(state.game, id),
+    })));
+    canvas.dataset.levelFourRemainingCells = String(state.game.grid.filter(Boolean).length);
+  }
   if (state.game.level === 8) {
     canvas.dataset.progressMagentaTop = String(getProgress(state.game, 'magenta-top'));
     canvas.dataset.progressYellowMid = String(getProgress(state.game, 'yellow-mid'));
@@ -4849,6 +4879,10 @@ function onPointerUp(event) {
   const acceptedLevelElevenSource = state.game.level === 11
     && bucket?.id === state.levelElevenSourceBucketId
     && (state.levelElevenSourceTimeline?.bucketId === bucket.id || state.levelElevenSourcePanelHeld);
+  const acceptedLevelFourReposition = state.game.level === 4
+    && bucket
+    && state.moveCollected === 0
+    && bucket.y >= state.game.gridRect.y + state.game.gridRect.height;
   let acceptedLevelThreeSource = false;
   const reservedLevelThreeSourceMix = bucket && state.game.level === 3
     && bucket.id === 'purple' && state.game.moves === 0;
@@ -4885,7 +4919,7 @@ function onPointerUp(event) {
     } else if (state.game.level === 2) {
       state.levelTwoInteractive = true;
       liveStatus.textContent = `已移动${colorName(bucket.color)}收集槽`;
-    } else if (state.moveCollected === 0 && state.game.status !== 'won') {
+    } else if (state.moveCollected === 0 && state.game.status !== 'won' && !acceptedLevelFourReposition) {
       bucket.x = state.dragOrigin.x;
       bucket.y = state.dragOrigin.y;
       state.game.invalidAt = { ...point, at: performance.now() };
@@ -4893,6 +4927,8 @@ function onPointerUp(event) {
       liveStatus.textContent = state.game.config.acceptMixedColorCells
         ? '没有收集到像素块，试着扫过对应图案区域'
         : `没有收集到${colorName(bucket.color)}像素块，试着拖过同色区域`;
+    } else if (acceptedLevelFourReposition) {
+      liveStatus.textContent = `已调整${colorName(bucket.color)}收集槽位置`;
     } else if (getProgress(state.game, bucket.id) >= 100) {
       bucket.completeAt = performance.now();
     }
