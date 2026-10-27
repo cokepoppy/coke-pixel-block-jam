@@ -2635,14 +2635,23 @@ test('Level 3 首拖播放原作混合音轨并与视频同步，设置暂停后
   await page.goto('/?previewLevel=3');
   const sourceVideo = page.locator('#level-three-source-gameplay-video');
   const sourceAudio = page.locator('#level-three-source-audio');
+  const sourceMusic = page.locator('#source-music-loop');
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始');
   await expect.poll(() => sourceAudio.evaluate((element) => element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA))
+    .toBeTruthy();
+
+  await page.getByRole('button', { name: '打开设置' }).click();
+  await page.getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(() => sourceMusic.evaluate((element) => !element.paused && element.currentTime > 0.1))
     .toBeTruthy();
 
   await dragAt60Hz(page, 500, 921, 500, 628, 500);
   await expect.poll(() => sourceAudio.evaluate((element) => (
     !element.paused && !element.muted && element.currentTime > 0.35
   ))).toBeTruthy();
+  await expect.poll(() => sourceMusic.evaluate((element) => element.paused), {
+    message: 'the level-specific original mix should replace the global music loop during the recorded action',
+  }).toBe(true);
   await expect.poll(() => sourceVideo.evaluate((element) => element.currentTime > 0.35)).toBeTruthy();
   const initialSync = await page.evaluate(() => ({
     audio: document.querySelector('#level-three-source-audio').currentTime,
@@ -2671,11 +2680,17 @@ test('Level 3 首拖播放原作混合音轨并与视频同步，设置暂停后
   await dialog.getByRole('button', { name: '继续游戏' }).click();
   await expect.poll(() => sourceVideo.evaluate((element) => !element.paused)).toBeTruthy();
   await expect.poll(() => sourceAudio.evaluate((element) => element.paused && element.muted)).toBeTruthy();
+  await expect.poll(() => sourceMusic.evaluate((element) => !element.paused), {
+    message: 'with source effects disabled, the original music bed should resume by itself',
+  }).toBe(true);
 
   await page.getByRole('button', { name: '打开设置' }).click();
   await page.getByRole('dialog', { name: '游戏设置' }).locator('[data-toggle="effects"]').click();
   await page.getByRole('dialog', { name: '游戏设置' }).getByRole('button', { name: '继续游戏' }).click();
   await expect.poll(() => sourceAudio.evaluate((element) => !element.paused && !element.muted)).toBeTruthy();
+  await expect.poll(() => sourceMusic.evaluate((element) => element.paused), {
+    message: 'restoring the mixed source audio should pause the global music bed again',
+  }).toBe(true);
   const resumed = await page.evaluate(() => ({
     audio: document.querySelector('#level-three-source-audio').currentTime,
     video: document.querySelector('#level-three-source-gameplay-video').currentTime,

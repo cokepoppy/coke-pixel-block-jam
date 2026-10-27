@@ -21,11 +21,20 @@ export class AudioEngine {
     this.effectBus = null;
     this.musicTimer = null;
     this.musicStep = 0;
+    this.sourceMusic = globalThis.document?.querySelector('#source-music-loop') ?? null;
+    this.sourceMusicFailed = false;
     this.sourceMixMode = false;
+    this.paused = false;
     this.resumeTask = null;
     this.lastCueAt = new Map();
     this.pendingCues = [];
     this.pendingCueAt = new Map();
+    this.sourceMusic?.addEventListener('error', () => {
+      this.sourceMusicFailed = true;
+      if (this.musicEnabled && !globalThis.document?.hidden && !this.isUsingSourceMix()) {
+        this.startSynthMusic();
+      }
+    });
   }
 
   ensureContext() {
@@ -47,17 +56,22 @@ export class AudioEngine {
 
   async startFromGesture() {
     this.ensureContext();
-    if (!this.context) return;
-    if (!this.resumeTask) {
+    if (!this.paused && this.musicEnabled && !document.hidden && !this.isUsingSourceMix()
+        && this.sourceMusic && !this.sourceMusicFailed) {
+      // Start the HTML media element in the trusted gesture before awaiting
+      // AudioContext.resume(), which can consume transient user activation.
+      this.startMusic();
+    }
+    if (this.context && !this.resumeTask) {
       this.resumeTask = this.context.resume().catch(() => {}).finally(() => { this.resumeTask = null; });
     }
-    await this.resumeTask;
-    if (this.context.state === 'running' && this.pendingCues.length) {
+    if (this.resumeTask) await this.resumeTask;
+    if (this.context?.state === 'running' && this.pendingCues.length) {
       const pending = this.pendingCues.splice(0);
       this.pendingCueAt.clear();
       for (const name of pending) this.playCue(name);
     }
-    if (this.musicEnabled && !document.hidden && !this.isUsingSourceMix()) this.startMusic();
+    if (!this.paused && this.musicEnabled && !document.hidden && !this.isUsingSourceMix()) this.startMusic();
   }
 
   setMusic(enabled) {
@@ -80,6 +94,8 @@ export class AudioEngine {
     if (this.effectBus && this.context) {
       this.effectBus.gain.setTargetAtTime(this.effectsEnabled && !this.isUsingSourceMix() ? 0.8 : 0, this.context.currentTime, 0.04);
     }
+    if (this.isUsingSourceMix()) this.stopMusic();
+    else if (this.musicEnabled && !document.hidden && !this.paused) this.startMusic();
   }
 
   playTone(note, duration, wave = 'sine', targetBus = this.musicBus, volume = 0.12, delay = 0) {
@@ -99,7 +115,23 @@ export class AudioEngine {
   }
 
   startMusic() {
-    if (!this.context || !this.musicEnabled || this.musicTimer || document.hidden || this.isUsingSourceMix()) return;
+    if (this.paused || !this.musicEnabled || document.hidden || this.isUsingSourceMix()) return;
+    if (this.sourceMusic && !this.sourceMusicFailed) {
+      if (this.sourceMusic.paused) {
+        this.sourceMusic.volume = 1;
+        void this.sourceMusic.play().catch((error) => {
+          if (error?.name === 'AbortError' || !this.musicEnabled || document.hidden || this.isUsingSourceMix()) return;
+          this.sourceMusicFailed = true;
+          this.startSynthMusic();
+        });
+      }
+      return;
+    }
+    this.startSynthMusic();
+  }
+
+  startSynthMusic() {
+    if (this.paused || !this.context || !this.musicEnabled || this.musicTimer || document.hidden || this.isUsingSourceMix()) return;
     const chords = [
       [60, 64, 67], [57, 60, 64], [53, 57, 60], [55, 59, 62],
     ];
@@ -117,6 +149,7 @@ export class AudioEngine {
   }
 
   stopMusic() {
+    if (this.sourceMusic && !this.sourceMusic.paused) this.sourceMusic.pause();
     if (this.musicTimer) globalThis.clearInterval(this.musicTimer);
     this.musicTimer = null;
   }
@@ -155,16 +188,18 @@ export class AudioEngine {
   }
 
   setPaused(paused) {
-    if (paused) this.stopMusic();
+    this.paused = Boolean(paused);
+    if (this.paused) this.stopMusic();
     else if (this.musicEnabled) void this.startFromGesture();
   }
 
   setSourceMixMode(enabled) {
     this.sourceMixMode = Boolean(enabled);
-    if (!this.context) return;
     const useSourceMix = this.isUsingSourceMix();
-    this.musicBus.gain.setTargetAtTime(this.musicEnabled && !useSourceMix ? 0.36 : 0, this.context.currentTime, 0.04);
-    this.effectBus.gain.setTargetAtTime(this.effectsEnabled && !useSourceMix ? 0.8 : 0, this.context.currentTime, 0.04);
+    if (this.context) {
+      this.musicBus.gain.setTargetAtTime(this.musicEnabled && !useSourceMix ? 0.36 : 0, this.context.currentTime, 0.04);
+      this.effectBus.gain.setTargetAtTime(this.effectsEnabled && !useSourceMix ? 0.8 : 0, this.context.currentTime, 0.04);
+    }
     if (useSourceMix) this.stopMusic();
     else if (this.musicEnabled) this.startMusic();
   }

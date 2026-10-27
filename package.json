@@ -15,6 +15,7 @@
     "audit:level3-frames": "node scripts/audit-level3-source-frames.mjs",
     "extract:level3-audio": "node scripts/extract-level3-source-audio.mjs",
     "extract:level3-video": "node scripts/extract-level3-source-video.mjs",
+    "extract:source-idle-music": "node scripts/extract-source-idle-music.mjs",
     "analyze:level2-transition": "node scripts/analyze-level2-transition-source.mjs",
     "render:transition-previews": "node scripts/render-transition-previews.mjs"
   },
