@@ -4337,8 +4337,8 @@ test('Level 11 前两次紫槽真实拖动会收集原片记录的混色区域',
   await page.goto('/?previewLevel=11');
   const initialState = createGameState(11);
   const sourceSweeps = [
-    { bucketId: 'purple-upper-right', start: { x: 339, y: 470 }, sweepEndX: 480, count: 73, yellow: 64, purple: 9 },
-    { bucketId: 'purple-upper-left', start: { x: 257, y: 470 }, sweepEndX: 360, count: 83, yellow: 74, purple: 9 },
+    { bucketId: 'purple-upper-right', start: { x: 339, y: 470 }, sweepEndX: 480, count: 81, yellow: 73, purple: 8 },
+    { bucketId: 'purple-upper-left', start: { x: 257, y: 470 }, sweepEndX: 360, count: 82, yellow: 72, purple: 10 },
   ];
 
   const canvas = await page.locator('#game-canvas').boundingBox();
