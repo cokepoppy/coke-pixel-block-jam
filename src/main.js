@@ -120,6 +120,12 @@ const state = {
   levelEightSourcePanelClip: 'first-magenta',
   levelEightSourceBucketId: null,
   levelEightSourceBoardImage: null,
+  levelElevenSourceTimeline: null,
+  levelElevenSourceCandidate: null,
+  levelElevenSourcePanelHeld: false,
+  levelElevenSourcePanelClip: 'first-purple',
+  levelElevenSourceBucketId: null,
+  levelElevenSourceBoardImage: null,
   levelOneWonPending: false,
 };
 // A direct level preview is a still opening frame until the player interacts.
@@ -346,6 +352,60 @@ const LEVEL_EIGHT_SOURCE_CLIPS = {
     duration: 1.6,
     bucketId: 'yellow-mid',
     status: '正在收集黄色像素',
+  },
+};
+const levelElevenFirstPurpleVideo = document.createElement('video');
+levelElevenFirstPurpleVideo.id = 'level-eleven-first-purple-video';
+levelElevenFirstPurpleVideo.src = '/assets/level11/level11-first-purple.webm';
+levelElevenFirstPurpleVideo.preload = initialLevel === 11 ? 'auto' : 'none';
+levelElevenFirstPurpleVideo.playsInline = true;
+levelElevenFirstPurpleVideo.muted = true;
+levelElevenFirstPurpleVideo.disablePictureInPicture = true;
+levelElevenFirstPurpleVideo.setAttribute('aria-hidden', 'true');
+levelElevenFirstPurpleVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelElevenFirstPurpleVideo);
+const levelElevenFirstPurpleAudio = document.createElement('audio');
+levelElevenFirstPurpleAudio.id = 'level-eleven-first-purple-audio';
+levelElevenFirstPurpleAudio.src = '/assets/level11/level11-first-purple-audio.m4a';
+levelElevenFirstPurpleAudio.preload = initialLevel === 11 ? 'auto' : 'none';
+levelElevenFirstPurpleAudio.muted = true;
+levelElevenFirstPurpleAudio.setAttribute('aria-hidden', 'true');
+levelElevenFirstPurpleAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelElevenFirstPurpleAudio);
+const levelElevenSecondPurpleVideo = document.createElement('video');
+levelElevenSecondPurpleVideo.id = 'level-eleven-second-purple-video';
+levelElevenSecondPurpleVideo.src = '/assets/level11/level11-second-purple.webm';
+levelElevenSecondPurpleVideo.preload = initialLevel === 11 ? 'auto' : 'none';
+levelElevenSecondPurpleVideo.playsInline = true;
+levelElevenSecondPurpleVideo.muted = true;
+levelElevenSecondPurpleVideo.disablePictureInPicture = true;
+levelElevenSecondPurpleVideo.setAttribute('aria-hidden', 'true');
+levelElevenSecondPurpleVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelElevenSecondPurpleVideo);
+const levelElevenSecondPurpleAudio = document.createElement('audio');
+levelElevenSecondPurpleAudio.id = 'level-eleven-second-purple-audio';
+levelElevenSecondPurpleAudio.src = '/assets/level11/level11-second-purple-audio.m4a';
+levelElevenSecondPurpleAudio.preload = initialLevel === 11 ? 'auto' : 'none';
+levelElevenSecondPurpleAudio.muted = true;
+levelElevenSecondPurpleAudio.setAttribute('aria-hidden', 'true');
+levelElevenSecondPurpleAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelElevenSecondPurpleAudio);
+const LEVEL_ELEVEN_SOURCE_CLIPS = {
+  'first-purple': {
+    video: levelElevenFirstPurpleVideo,
+    audio: levelElevenFirstPurpleAudio,
+    frames: 84,
+    duration: 1.4,
+    bucketId: 'purple-upper-right',
+    status: '正在收集紫色像素',
+  },
+  'second-purple': {
+    video: levelElevenSecondPurpleVideo,
+    audio: levelElevenSecondPurpleAudio,
+    frames: 72,
+    duration: 1.2,
+    bucketId: 'purple-upper-left',
+    status: '正在收集紫色像素',
   },
 };
 const levelThirteenUfoReferenceVideo = document.createElement('video');
@@ -1271,7 +1331,9 @@ function drawPixelWall() {
       }
     }
     if (state.game.level === 11) {
-      const image = levelElevenBoardImages[board.id];
+      const image = board.id === 'upper' && state.levelElevenSourceBoardImage
+        ? state.levelElevenSourceBoardImage
+        : levelElevenBoardImages[board.id];
       if (image?.complete && image.naturalWidth > 0) {
         ctx.save();
         ctx.imageSmoothingEnabled = false;
@@ -2518,6 +2580,205 @@ function getLevelEightSourceClip(clipId) {
   return LEVEL_EIGHT_SOURCE_CLIPS[clipId] ?? null;
 }
 
+function getLevelElevenSourceClip(clipId) {
+  return LEVEL_ELEVEN_SOURCE_CLIPS[clipId] ?? null;
+}
+
+function getLevelElevenPanelVideo() {
+  const clipId = state.levelElevenSourceTimeline?.clipId ?? state.levelElevenSourcePanelClip;
+  return getLevelElevenSourceClip(clipId)?.video ?? null;
+}
+
+function drawLevelElevenSourcePanelFrame(video = getLevelElevenPanelVideo()) {
+  if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 27, 165, 541, 470);
+  ctx.restore();
+  const clipId = state.levelElevenSourceTimeline?.clipId ?? state.levelElevenSourcePanelClip;
+  const clip = getLevelElevenSourceClip(clipId);
+  canvas.dataset.levelElevenSourceClip = clipId;
+  canvas.dataset.levelElevenSourceFrame = String(Math.max(0, Math.min((clip?.frames ?? 1) - 1, Math.round(video.currentTime * 60) - 1)));
+}
+
+function scheduleLevelElevenSourceFrameDraw(timeline) {
+  const video = timeline.video;
+  if (typeof video.requestVideoFrameCallback !== 'function'
+      || timeline.frameCallbackPending
+      || state.levelElevenSourceTimeline !== timeline
+      || timeline.completed) return;
+  timeline.frameCallbackPending = true;
+  video.requestVideoFrameCallback((_now, metadata) => {
+    timeline.frameCallbackPending = false;
+    if (state.levelElevenSourceTimeline !== timeline || timeline.completed) return;
+    if (!video.paused && !video.seeking && state.game.status !== 'paused' && !document.hidden) {
+      drawLevelElevenSourcePanelFrame(video);
+      if (typeof window.__levelElevenSourceFrameObserver === 'function') {
+        window.__levelElevenSourceFrameObserver({ ...metadata, clipId: timeline.clipId });
+      }
+    }
+    scheduleLevelElevenSourceFrameDraw(timeline);
+  });
+}
+
+function syncLevelElevenSourceAudio(targetTime, shouldPlay, sourceAudio, fallbackDuration) {
+  if (!shouldPlay || !audio.isUsingSourceMix()) {
+    if (!sourceAudio.paused) sourceAudio.pause();
+    if (!sourceAudio.muted) sourceAudio.muted = true;
+    return;
+  }
+  sourceAudio.muted = false;
+  if (sourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || sourceAudio.seeking) return;
+  const duration = Number.isFinite(sourceAudio.duration) ? sourceAudio.duration : fallbackDuration;
+  const target = Math.max(0, Math.min(duration - 0.01, targetTime));
+  if (Math.abs(target - sourceAudio.currentTime) > 0.08) {
+    sourceAudio.pause();
+    sourceAudio.currentTime = target;
+    return;
+  }
+  if (target < duration - 0.02 && sourceAudio.paused) void sourceAudio.play().catch(() => {});
+}
+
+function beginLevelElevenSourcePlayback(clipId) {
+  const clip = getLevelElevenSourceClip(clipId);
+  const bucket = clip && getBucket(state.game, clip.bucketId);
+  const expectedMoves = clipId === 'first-purple' ? 0 : 1;
+  if (!clip || !bucket || state.game.level !== 11 || state.game.moves !== expectedMoves
+      || state.game.activeBucketId !== clip.bucketId
+      || clip.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
+
+  clip.video.pause();
+  clip.audio.pause();
+  clip.audio.muted = true;
+  clip.video.currentTime = 0;
+  if (clip.audio.readyState >= HTMLMediaElement.HAVE_METADATA) clip.audio.currentTime = 0;
+  const timeline = {
+    clipId,
+    video: clip.video,
+    audio: clip.audio,
+    frames: clip.frames,
+    duration: clip.duration,
+    bucketId: clip.bucketId,
+    pausedAt: null,
+    completed: false,
+    finishingAtEnd: false,
+    frameCallbackPending: false,
+  };
+  state.levelElevenSourceTimeline = timeline;
+  state.levelElevenSourcePanelClip = clipId;
+  state.levelElevenSourceBucketId = clip.bucketId;
+  state.levelElevenSourcePanelHeld = false;
+  state.game.started = true;
+  audio.setSourceMixMode(true);
+  syncLevelElevenSourceAudio(0, true, clip.audio, clip.duration);
+  drawLevelElevenSourcePanelFrame(clip.video);
+  if (typeof window.__levelElevenSourceFrameObserver === 'function') {
+    window.__levelElevenSourceFrameObserver({ mediaTime: clip.video.currentTime, presentedFrames: 0, initial: true, clipId });
+  }
+  void clip.video.play().catch(() => {});
+  scheduleLevelElevenSourceFrameDraw(timeline);
+  liveStatus.textContent = clip.status;
+  canvas.dataset.levelElevenSourceHeld = 'false';
+  return true;
+}
+
+function cancelLevelElevenSourcePlayback() {
+  state.levelElevenSourceTimeline = null;
+  state.levelElevenSourceCandidate = null;
+  state.levelElevenSourcePanelHeld = false;
+  state.levelElevenSourcePanelClip = 'first-purple';
+  state.levelElevenSourceBucketId = null;
+  state.levelElevenSourceBoardImage = null;
+  for (const clip of Object.values(LEVEL_ELEVEN_SOURCE_CLIPS)) {
+    clip.video.pause();
+    clip.audio.pause();
+    clip.audio.muted = true;
+    if (clip.video.readyState >= HTMLMediaElement.HAVE_METADATA) clip.video.currentTime = 0;
+    if (clip.audio.readyState >= HTMLMediaElement.HAVE_METADATA) clip.audio.currentTime = 0;
+  }
+  audio.setSourceMixMode(false);
+}
+
+function finishLevelElevenSourcePlayback() {
+  const timeline = state.levelElevenSourceTimeline;
+  if (!timeline?.completed) return;
+  const bucket = getBucket(state.game, timeline.bucketId);
+  if (bucket) {
+    fillBucket(state.game, bucket.id);
+    bucket.visible = false;
+  }
+  const sourceBoard = document.createElement('canvas');
+  sourceBoard.width = 462;
+  sourceBoard.height = 142;
+  const boardContext = sourceBoard.getContext('2d', { willReadFrequently: true });
+  boardContext.imageSmoothingEnabled = false;
+  boardContext.drawImage(timeline.video, 37, 28, 462, 142, 0, 0, 462, 142);
+  state.levelElevenSourceBoardImage = sourceBoard;
+  state.game.moves = Math.max(state.game.moves, timeline.clipId === 'first-purple' ? 1 : 2);
+  canvas.dataset[`progress${timeline.bucketId.replace(/(^|-)(.)/g, (_match, _dash, letter) => letter.toUpperCase())}`]
+    = String(bucket ? getProgress(state.game, bucket.id) : 0);
+  canvas.dataset.levelElevenRemainingCells = String(state.game.grid.filter(Boolean).length);
+  liveStatus.textContent = '已收集紫色像素，进度 100%';
+  state.levelElevenSourceTimeline = null;
+  state.levelElevenSourcePanelHeld = true;
+  state.levelElevenSourcePanelClip = timeline.clipId;
+  timeline.video.pause();
+  syncLevelElevenSourceAudio(timeline.duration, false, timeline.audio, timeline.duration);
+  audio.setSourceMixMode(false);
+  canvas.dataset.levelElevenSourceHeld = 'true';
+  canvas.dataset.levelElevenSourceClip = timeline.clipId;
+}
+
+function finishLevelElevenSourcePlaybackAtLastFrame(timeline) {
+  if (timeline.finishingAtEnd || state.levelElevenSourceTimeline !== timeline) return;
+  timeline.finishingAtEnd = true;
+  const { video, audio: sourceAudio, duration } = timeline;
+  const videoDuration = Number.isFinite(video.duration) ? video.duration : duration;
+  const lastFrameTime = Math.max(0, Math.min((timeline.frames - 1) / 60, videoDuration - 0.001));
+  video.pause();
+  syncLevelElevenSourceAudio(duration, false, sourceAudio, duration);
+  const finishAtDecodedFrame = () => {
+    if (state.levelElevenSourceTimeline !== timeline) return;
+    drawLevelElevenSourcePanelFrame(video);
+    timeline.completed = true;
+    finishLevelElevenSourcePlayback();
+  };
+  if (!video.seeking && Math.abs(video.currentTime - lastFrameTime) <= (1 / 240)) {
+    finishAtDecodedFrame();
+    return;
+  }
+  video.addEventListener('seeked', finishAtDecodedFrame, { once: true });
+  video.currentTime = lastFrameTime;
+}
+
+function advanceLevelElevenSourcePlayback(now) {
+  const timeline = state.levelElevenSourceTimeline;
+  if (!timeline) return;
+  const { video, audio: sourceAudio, duration } = timeline;
+  if (state.game.level !== 11) {
+    cancelLevelElevenSourcePlayback();
+    return;
+  }
+  if (state.game.status === 'paused' || document.hidden) {
+    timeline.pausedAt ??= now;
+    if (!video.paused) video.pause();
+    syncLevelElevenSourceAudio(0, false, sourceAudio, duration);
+    return;
+  }
+  timeline.pausedAt = null;
+  if (timeline.finishingAtEnd) return;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  syncLevelElevenSourceAudio(video.currentTime, !timeline.completed, sourceAudio, duration);
+  const videoDuration = Number.isFinite(video.duration) ? video.duration : duration;
+  const lastFrameTime = Math.max(0, Math.min(timeline.frames / 60, videoDuration - 0.001));
+  if (!timeline.completed && (video.ended || video.currentTime >= lastFrameTime)) {
+    finishLevelElevenSourcePlaybackAtLastFrame(timeline);
+  } else if (!timeline.completed && video.paused) {
+    void video.play().catch(() => {});
+  }
+  scheduleLevelElevenSourceFrameDraw(timeline);
+}
+
 function getLevelEightPanelVideo() {
   const clipId = state.levelEightSourceTimeline?.clipId ?? state.levelEightSourcePanelClip;
   return getLevelEightSourceClip(clipId)?.video ?? null;
@@ -3752,6 +4013,7 @@ function drawScene(now) {
   }
   advanceLevelThreeSourcePlayback(now);
   if (state.game.level === 8 || state.levelEightSourceTimeline) advanceLevelEightSourcePlayback(now);
+  if (state.game.level === 11 || state.levelElevenSourceTimeline) advanceLevelElevenSourcePlayback(now);
   advanceLevelTwoSourcePlayback(now);
   advanceLevelTwoCollectionProgress(now);
   advanceLevelOneSweep(now);
@@ -3788,6 +4050,12 @@ function drawScene(now) {
     canvas.dataset.progressYellowMid = String(getProgress(state.game, 'yellow-mid'));
     canvas.dataset.levelEightSourceHeld = String(state.levelEightSourcePanelHeld);
   }
+  if (state.game.level === 11) {
+    canvas.dataset.levelElevenSourceHeld = String(state.levelElevenSourcePanelHeld);
+    canvas.dataset.levelElevenRemainingCells = String(state.game.grid.filter(Boolean).length);
+    canvas.dataset.progressPurpleUpperRight = String(getProgress(state.game, 'purple-upper-right'));
+    canvas.dataset.progressPurpleUpperLeft = String(getProgress(state.game, 'purple-upper-left'));
+  }
   drawBackground();
   drawHeader();
   if (!showLevelTwoLivePanel) drawGameFrame();
@@ -3806,6 +4074,10 @@ function drawScene(now) {
   const showLevelEightSourcePanel = state.game.level === 8
     && (Boolean(state.levelEightSourceTimeline) || state.levelEightSourcePanelHeld)
     && levelEightPanelVideo?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  const levelElevenPanelVideo = getLevelElevenPanelVideo();
+  const showLevelElevenSourcePanel = state.game.level === 11
+    && (Boolean(state.levelElevenSourceTimeline) || state.levelElevenSourcePanelHeld)
+    && levelElevenPanelVideo?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
   const showLevelThreeOpeningPanel = state.game.level === 3
     && !state.dragging
     && state.game.moves === 0
@@ -3901,6 +4173,11 @@ function drawScene(now) {
     drawBuckets();
   } else if (showLevelEightSourcePanel) {
     drawLevelEightSourcePanelFrame();
+  } else if (showLevelElevenSourcePanel) {
+    drawPixelWall();
+    drawPad();
+    drawBuckets();
+    drawLevelElevenSourcePanelFrame(levelElevenPanelVideo);
   } else {
     drawPixelWall();
     drawPad();
@@ -3912,13 +4189,14 @@ function drawScene(now) {
   if (!showLevelTwoLivePanel) drawFlyingSaucer(now);
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
   if (state.game.status === 'tutorial') drawTutorialCard(now);
-  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelEightSourcePanel
+  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
       && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
   const showRecordedUfoFrame = canvas.dataset.ufoVisualSource === 'recorded';
-  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelEightSourcePanel
+  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
       && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
 
-  if (!showLevelThreeSourcePanel && !showLevelEightSourcePanel && state.game.invalidAt && now - state.game.invalidAt.at < 520) {
+  if (!showLevelThreeSourcePanel && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
+      && state.game.invalidAt && now - state.game.invalidAt.at < 520) {
     const life = 1 - (now - state.game.invalidAt.at) / 520;
     ctx.save();
     ctx.globalAlpha = life;
@@ -4026,7 +4304,7 @@ function dockLevelTwoBucket(bucket, startedAt) {
 
 function onPointerDown(event) {
   if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
-  if (state.levelEightSourceTimeline) return;
+  if (state.levelEightSourceTimeline || state.levelElevenSourceTimeline) return;
   const point = mapPointer(event);
   if (state.game.level === 3 && state.levelThreeSourceTimeline) {
     if (state.levelThreeSourceTimeline.completed) finishLevelThreeSourcePlayback();
@@ -4093,6 +4371,8 @@ function onPointerDown(event) {
   state.game.invalidAt = null;
   state.levelEightSourceBucketId = null;
   state.levelEightSourceCandidate = null;
+  state.levelElevenSourceBucketId = null;
+  state.levelElevenSourceCandidate = null;
   if (state.game.level === 8) {
     const candidateClipId = state.game.moves === 0 && bucket.id === 'magenta-top'
       ? 'first-magenta'
@@ -4102,6 +4382,17 @@ function onPointerDown(event) {
     const candidateClip = getLevelEightSourceClip(candidateClipId);
     if (candidateClip?.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
       state.levelEightSourceCandidate = candidateClipId;
+    }
+  }
+  if (state.game.level === 11) {
+    const candidateClipId = state.game.moves === 0 && bucket.id === 'purple-upper-right'
+      ? 'first-purple'
+      : state.game.moves === 1 && bucket.id === 'purple-upper-left'
+        ? 'second-purple'
+        : null;
+    const candidateClip = getLevelElevenSourceClip(candidateClipId);
+    if (candidateClip?.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      state.levelElevenSourceCandidate = candidateClipId;
     }
   }
   if (state.game.level === 1) prepareLevelOneSourceSegment(bucket.color);
@@ -4120,7 +4411,15 @@ function onPointerMove(event) {
     state.lastPoint = point;
     return;
   }
+  if (state.levelElevenSourceTimeline) {
+    state.lastPoint = point;
+    return;
+  }
   if (state.game.level === 8 && state.levelEightSourceBucketId === bucket.id) {
+    state.lastPoint = point;
+    return;
+  }
+  if (state.game.level === 11 && state.levelElevenSourceBucketId === bucket.id) {
     state.lastPoint = point;
     return;
   }
@@ -4142,6 +4441,22 @@ function onPointerMove(event) {
     // The source clip is held only as the last verified frame. Once the player
     // begins another ordinary move, return to the live post-clip board.
     state.levelEightSourcePanelHeld = false;
+  }
+  if (state.levelElevenSourceCandidate) {
+    if (state.dragDistance < 4) {
+      state.lastPoint = point;
+      return;
+    }
+    const candidateClipId = state.levelElevenSourceCandidate;
+    state.levelElevenSourceCandidate = null;
+    if (point.y < state.lastPoint.y && beginLevelElevenSourcePlayback(candidateClipId)) {
+      state.lastPoint = point;
+      return;
+    }
+    state.levelElevenSourcePanelHeld = false;
+  } else if (state.game.level === 11 && state.levelElevenSourcePanelHeld && state.dragDistance >= 4) {
+    // Keep the last source frame until the player begins a different real move.
+    state.levelElevenSourcePanelHeld = false;
   }
 
   if (state.dragDistance >= 4 && !state.game.started) {
@@ -4190,6 +4505,7 @@ function restartCurrentLevel() {
   levelTwoSourceGameplayVideo.currentTime = 0;
   cancelLevelThreeSourcePlayback();
   cancelLevelEightSourcePlayback();
+  cancelLevelElevenSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
   levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
@@ -4220,6 +4536,7 @@ function advanceToNextLevel() {
   levelTwoSourceGameplayVideo.currentTime = 0;
   cancelLevelThreeSourcePlayback();
   cancelLevelEightSourcePlayback();
+  cancelLevelElevenSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
   levelThirteenUfoReferenceVideo.currentTime = 0;
   resetLevelTwoSourceAudio();
@@ -4244,6 +4561,14 @@ function advanceToNextLevel() {
     levelEightSourceAudio.load();
     levelEightSecondYellowVideo.load();
     levelEightSecondYellowAudio.load();
+  }
+  if (state.game.level === 11) {
+    for (const clip of Object.values(LEVEL_ELEVEN_SOURCE_CLIPS)) {
+      clip.video.preload = 'auto';
+      clip.audio.preload = 'auto';
+      clip.video.load();
+      clip.audio.load();
+    }
   }
   if (state.game.level === 7) state.freezeCharges = 2;
   if (state.game.level === 9) state.hammerCharges = 2;
@@ -4521,6 +4846,9 @@ function onPointerUp(event) {
   const acceptedLevelEightSource = state.game.level === 8
     && bucket?.id === state.levelEightSourceBucketId
     && (state.levelEightSourceTimeline?.bucketId === bucket.id || state.levelEightSourcePanelHeld);
+  const acceptedLevelElevenSource = state.game.level === 11
+    && bucket?.id === state.levelElevenSourceBucketId
+    && (state.levelElevenSourceTimeline?.bucketId === bucket.id || state.levelElevenSourcePanelHeld);
   let acceptedLevelThreeSource = false;
   const reservedLevelThreeSourceMix = bucket && state.game.level === 3
     && bucket.id === 'purple' && state.game.moves === 0;
@@ -4543,7 +4871,7 @@ function onPointerUp(event) {
     }
   }
   if (reservedLevelThreeSourceMix && !acceptedLevelThreeSource) audio.setSourceMixMode(false);
-  if (bucket && state.dragDistance > 5 && !acceptedLevelEightSource) {
+  if (bucket && state.dragDistance > 5 && !acceptedLevelEightSource && !acceptedLevelElevenSource) {
     const levelTwoDocked = state.game.level === 2 && dockLevelTwoBucket(bucket, state.dragStartedAt);
     if (state.game.level === 2 && !levelTwoDocked && state.levelTwoSourceTimeline) {
       leaveLevelTwoSourceSequence();
@@ -4575,6 +4903,7 @@ function onPointerUp(event) {
   state.dragOffset = null;
   state.dragDistance = 0;
   state.levelEightSourceCandidate = null;
+  state.levelElevenSourceCandidate = null;
   state.game.activeBucketId = null;
   if (state.game.level !== 2) state.game.moves += state.moveCollected > 0 ? 1 : 0;
   if (state.game.level === 2 && !state.levelTwoSourceTimeline) {

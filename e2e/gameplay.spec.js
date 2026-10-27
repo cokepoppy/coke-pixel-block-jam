@@ -4335,6 +4335,28 @@ test('Level 11 前两次紫槽真实拖动会收集原片记录的混色区域',
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/?previewLevel=11');
+  await page.waitForFunction(() => ['first-purple', 'second-purple'].every((clip) => {
+    const video = document.querySelector(`#level-eleven-${clip}-video`);
+    const audio = document.querySelector(`#level-eleven-${clip}-audio`);
+    return video?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && audio?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }));
+  await page.evaluate(() => {
+    window.__levelElevenSourceFrames = [];
+    window.__levelElevenSourceFrameObserver = ({ mediaTime, presentedFrames, clipId }) => {
+      const video = document.querySelector(`#level-eleven-${clipId}-video`);
+      const audio = document.querySelector(`#level-eleven-${clipId}-audio`);
+      window.__levelElevenSourceFrames.push({
+        clipId,
+        mediaTime,
+        presentedFrames,
+        videoTime: video?.currentTime ?? null,
+        audioTime: audio?.currentTime ?? null,
+        audioPaused: audio?.paused ?? true,
+        audioMuted: audio?.muted ?? true,
+      });
+    };
+  });
   const initialState = createGameState(11);
   const sourceSweeps = [
     { bucketId: 'purple-upper-right', start: { x: 339, y: 470 }, sweepEndX: 480, count: 81, yellow: 73, purple: 8 },
@@ -4373,11 +4395,37 @@ test('Level 11 前两次紫槽真实拖动会收集原片记录的混色区域',
     await page.mouse.move(...Object.values(pointerAt(start.x, start.y)));
     await page.mouse.down();
     await moveSegment(start, { x: 350, y: 224 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-eleven-source-clip', index === 0 ? 'first-purple' : 'second-purple');
+    const clipName = index === 0 ? 'first-purple' : 'second-purple';
+    const sourceVideo = page.locator(`#level-eleven-${clipName}-video`);
+    const sourceAudio = page.locator(`#level-eleven-${clipName}-audio`);
     await moveSegment({ x: 350, y: 224 }, { x: 90, y: 224 });
     await moveSegment({ x: 90, y: 224 }, { x: sweep.sweepEndX, y: 224 });
     await moveSegment({ x: sweep.sweepEndX, y: 224 }, start);
     await page.mouse.up();
     await expect(page.locator('#live-status')).toContainText('进度 100%');
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-eleven-source-held', 'true');
+    await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-eleven-remaining-cells')))
+      .toBe(initialState.grid.filter(Boolean).length - sourceSweeps.slice(0, index + 1).reduce((sum, action) => sum + action.count, 0));
+    const playback = await page.evaluate((currentClip) => {
+      const frames = window.__levelElevenSourceFrames.filter(({ clipId }) => clipId === currentClip);
+      const audible = frames.filter(({ audioPaused, audioMuted, videoTime, audioTime }) => (
+        !audioPaused && !audioMuted && Number.isFinite(videoTime) && Number.isFinite(audioTime)
+      ));
+      return {
+        frames: new Set(frames.filter(({ presentedFrames }) => presentedFrames > 0)
+          .map(({ mediaTime }) => Math.round(mediaTime * 60))).size,
+        audibleFrames: audible.length,
+        maxAudioVideoDriftMs: audible.length
+          ? Math.max(...audible.map(({ videoTime, audioTime }) => Math.abs(videoTime - audioTime) * 1_000))
+          : null,
+      };
+    }, clipName);
+    expect(playback.frames, `${clipName} should display successive source frames: ${JSON.stringify(playback)}`).toBeGreaterThan(25);
+    expect(playback.audibleFrames, `${clipName} should play the source game's audio: ${JSON.stringify(playback)}`).toBeGreaterThan(3);
+    expect(playback.maxAudioVideoDriftMs, `${clipName} audio should stay aligned with video: ${JSON.stringify(playback)}`).toBeLessThan(120);
+    await expect(sourceVideo).toHaveJSProperty('paused', true);
+    await expect(sourceAudio).toHaveJSProperty('paused', true);
 
     await page.waitForTimeout(1_400);
     const remainingSamples = await page.evaluate((targetCells) => {
