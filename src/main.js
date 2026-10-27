@@ -275,6 +275,7 @@ const levelThreePanelCanvas = document.createElement('canvas');
 levelThreePanelCanvas.width = 554;
 levelThreePanelCanvas.height = 820;
 const levelThreePanelContext = levelThreePanelCanvas.getContext('2d');
+let levelThreePanelCacheKey = null;
 const levelThreeSourceGameplayVideo = document.createElement('video');
 levelThreeSourceGameplayVideo.id = 'level-three-source-gameplay-video';
 levelThreeSourceGameplayVideo.src = '/assets/level3/level3-gameplay-source.mp4';
@@ -2402,20 +2403,27 @@ function drawLevelThreeSourcePanelFrame() {
   drawLevelThreePanelLayer(video, video.videoWidth, video.videoHeight);
 }
 
-function drawLevelThreePanelLayer(source, sourceWidth, sourceHeight) {
-  levelThreePanelContext.save();
-  levelThreePanelContext.globalCompositeOperation = 'source-over';
-  levelThreePanelContext.globalAlpha = 1;
-  levelThreePanelContext.clearRect(0, 0, 554, 820);
-  levelThreePanelContext.imageSmoothingEnabled = false;
-  levelThreePanelContext.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, 554, 820);
-  levelThreePanelContext.globalCompositeOperation = 'destination-in';
-  const lowerEdgeFade = levelThreePanelContext.createLinearGradient(0, 724, 0, 820);
-  lowerEdgeFade.addColorStop(0, 'rgba(0, 0, 0, 1)');
-  lowerEdgeFade.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  levelThreePanelContext.fillStyle = lowerEdgeFade;
-  levelThreePanelContext.fillRect(0, 0, 554, 820);
-  levelThreePanelContext.restore();
+function drawLevelThreePanelLayer(source, sourceWidth, sourceHeight, cacheKey = null) {
+  if (cacheKey === null || cacheKey !== levelThreePanelCacheKey) {
+    levelThreePanelContext.save();
+    levelThreePanelContext.globalCompositeOperation = 'source-over';
+    levelThreePanelContext.globalAlpha = 1;
+    levelThreePanelContext.clearRect(0, 0, 554, 820);
+    levelThreePanelContext.imageSmoothingEnabled = false;
+    levelThreePanelContext.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, 554, 820);
+    levelThreePanelContext.globalCompositeOperation = 'destination-in';
+    const lowerEdgeFade = levelThreePanelContext.createLinearGradient(0, 724, 0, 820);
+    lowerEdgeFade.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    lowerEdgeFade.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    levelThreePanelContext.fillStyle = lowerEdgeFade;
+    levelThreePanelContext.fillRect(0, 0, 554, 820);
+    levelThreePanelContext.restore();
+    levelThreePanelCacheKey = cacheKey;
+  }
+  drawLevelThreePanelComposite();
+}
+
+function drawLevelThreePanelComposite() {
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(levelThreePanelCanvas, 22, 162);
@@ -3853,14 +3861,22 @@ function drawScene(now) {
       drawLevelOneSourceBoardFrame();
     }
   } else if (showLevelOneCompletedSourceFrame) {
-    // Keep the last displayed source board visible while the next color's
-    // source video seeks. The seek temporarily drops readyState, but the
-    // offscreen canvas still holds the last frame the player actually saw.
-    drawPixelWall();
-    drawPad();
-    drawBuckets();
-    drawParticles(now);
-    drawLevelOneSourceBoardFrame();
+    if (state.levelOneSourceTimeline.color === 'yellow') {
+      // The yellow action clip ends on a full tray. Hold that exact source
+      // panel until the player starts the next color; otherwise the live
+      // bucket exit animation changes the frame while the source clock is
+      // paused at its final image.
+      drawLevelOneSourceActionPanel();
+    } else {
+      // Keep the last displayed source board visible while the next color's
+      // source video seeks. The seek temporarily drops readyState, but the
+      // offscreen canvas still holds the last frame the player actually saw.
+      drawPixelWall();
+      drawPad();
+      drawBuckets();
+      drawParticles(now);
+      drawLevelOneSourceBoardFrame();
+    }
   } else if (showSourceOpeningPanel) {
     const tutorialPanelSource = !prefersReducedMotion.matches
       && levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -3886,7 +3902,7 @@ function drawScene(now) {
     drawBuckets();
   }
   if (!showLevelThreeSourcePanel && showLevelThreeOpeningPanel) {
-    drawLevelThreePanelLayer(levelThreeOpeningPanelImage, 554, 820);
+    drawLevelThreePanelLayer(levelThreeOpeningPanelImage, 554, 820, 'level-three-opening');
   }
   if (!showLevelTwoLivePanel) drawFlyingSaucer(now);
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
@@ -3908,7 +3924,13 @@ function drawScene(now) {
     ctx.stroke();
     ctx.restore();
   }
-  if (showLevelThreeSourcePanel) drawLevelThreeSourcePanelFrame();
+  if (showLevelThreeSourcePanel) {
+    if (typeof levelThreeSourceGameplayVideo.requestVideoFrameCallback === 'function') {
+      drawLevelThreePanelComposite();
+    } else {
+      drawLevelThreeSourcePanelFrame();
+    }
+  }
 }
 
 function drawTubeLabels() {

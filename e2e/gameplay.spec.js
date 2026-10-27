@@ -536,11 +536,12 @@ async function startLevelOneYellowFrameProbe(page) {
         }
       }
       if (finalFrame || sourceTime >= 1.65) result.done = true;
+      if (result.done) result.recording = false;
     };
     window.__levelOneSourceFrameObserver = (metadata) => {
       const sourceTime = metadata.mediaTime;
       const presentingPlaybackFrame = !source.paused && !source.seeking;
-      if (result.recording && presentingPlaybackFrame && sourceTime >= 0.48 && sourceTime <= 1.65) {
+      if (result.recording && presentingPlaybackFrame && sourceTime >= 0.48) {
         result.videoFrames.push({
           sourceTime,
           sourceFrame: Math.round(sourceTime * 60),
@@ -1521,11 +1522,14 @@ test('Level 1 黄色墙面先飞散再入槽，关键进度贴近录屏', async 
   expect(frameProbe.timedOut, 'source-synced frame probe should reach the end of the yellow clear').toBeFalsy();
   const observedSourceFrames = [...new Set(frameProbe.videoFrames.map(({ sourceFrame }) => sourceFrame))].sort((a, b) => a - b);
   const maximumSourceFrameGap = Math.max(...observedSourceFrames.slice(1).map((frame, index) => frame - observedSourceFrames[index]));
-  console.log(`Level 1 yellow observed frame coverage: ${JSON.stringify({ videoCallbacks: frameProbe.videoFrames.length, canvasSamples: frameProbe.samples.length, first: observedSourceFrames[0], last: observedSourceFrames.at(-1), maximumSourceFrameGap, gaps: observedSourceFrames.slice(1).map((frame, index) => frame - observedSourceFrames[index]).filter((gap) => gap > 1) })}`);
+  const terminalSourceTime = frameProbe.videoFrames.at(-1)?.sourceTime;
+  console.log(`Level 1 yellow observed frame coverage: ${JSON.stringify({ videoCallbacks: frameProbe.videoFrames.length, canvasSamples: frameProbe.samples.length, first: observedSourceFrames[0], last: observedSourceFrames.at(-1), terminalSourceTime, maximumSourceFrameGap, gaps: observedSourceFrames.slice(1).map((frame, index) => frame - observedSourceFrames[index]).filter((gap) => gap > 1) })}`);
   expect(observedSourceFrames.length, 'observe at least 50 distinct browser-presented source frames throughout the yellow sweep').toBeGreaterThanOrEqual(50);
   expect(frameProbe.samples.length, 'compare at least 50 browser-presented canvas frames against their paired source frames').toBeGreaterThanOrEqual(50);
   expect(observedSourceFrames[0], 'source frame checks should begin within five frames after the pre-seeked playback start').toBeLessThanOrEqual(35);
   expect(observedSourceFrames.at(-1), 'source frame checks should cover the yellow sweep exit').toBeGreaterThanOrEqual(98);
+  expect(terminalSourceTime, 'record the first presented source frame at or after the yellow sweep exit').toBeGreaterThanOrEqual(1.65);
+  expect(terminalSourceTime, 'the yellow sweep exit frame should arrive within three source frames').toBeLessThanOrEqual(1.7);
   expect(maximumSourceFrameGap, 'the displayed source timeline should not skip more than two 60 fps source frames at a time').toBeLessThanOrEqual(3);
   expect(frameProbe.samples.every(({ maximumChannelError }) => maximumChannelError <= 4),
     'each displayed yellow board frame should stay within four RGB values of its paired video frame').toBeTruthy();
@@ -2442,6 +2446,8 @@ test('Level 3 首次真实拖动启动 23 秒源片回放，无遮挡区逐帧�
     const actualContext = game.getContext('2d');
     const seen = new Set();
     window.__levelThreePresentedSourceFrames = [];
+    window.__levelThreePresentedFrameMetadata = [];
+    window.__levelThreeInitialSourceFrame = null;
     window.__levelThreeSourceFrameComparisons = [];
     window.__levelThreeSourceStateSamples = [];
     window.__levelThreeSourceStateObserver = (sample) => {
@@ -2468,9 +2474,18 @@ test('Level 3 首次真实拖动启动 23 秒源片回放，无遮挡区逐帧�
     observeWin();
     window.__levelThreeSourceFrameObserver = (metadata) => {
       const frame = Math.round(metadata.mediaTime * 60);
+      if (metadata.initial) {
+        window.__levelThreeInitialSourceFrame = frame;
+        return;
+      }
       if (seen.has(frame)) return;
       seen.add(frame);
       window.__levelThreePresentedSourceFrames.push(frame);
+      window.__levelThreePresentedFrameMetadata.push({
+        frame,
+        mediaTime: metadata.mediaTime,
+        presentedFrames: metadata.presentedFrames,
+      });
       if (window.__levelThreePresentedSourceFrames.length % 15 !== 0) return;
       referenceContext.clearRect(0, 0, 554, 724);
       referenceContext.drawImage(video, 0, 0, 554, 724, 0, 0, 554, 724);
@@ -2539,10 +2554,24 @@ test('Level 3 首次真实拖动启动 23 秒源片回放，无遮挡区逐帧�
   }
 
   const presentedFrames = await page.evaluate(() => window.__levelThreePresentedSourceFrames);
+  const presentedFrameMetadata = await page.evaluate(() => window.__levelThreePresentedFrameMetadata);
+  const initialSourceFrame = await page.evaluate(() => window.__levelThreeInitialSourceFrame);
   const comparison = await page.evaluate(() => window.__levelThreeSourceFrameComparisons);
-  const maximumPresentedFrameGap = presentedFrames.reduce((maximum, frame, index) => (
-    index === 0 ? maximum : Math.max(maximum, frame - presentedFrames[index - 1])
-  ), 0);
+  const presentedFrameGaps = presentedFrames.slice(1).map((frame, index) => ({
+    from: presentedFrames[index],
+    to: frame,
+    gap: frame - presentedFrames[index],
+  }));
+  const maximumPresentedFrameGap = presentedFrameGaps.reduce((maximum, item) => Math.max(maximum, item.gap), 0);
+  console.log(`[level3-presented-frame-audit] ${JSON.stringify({
+    initialSourceFrame,
+    count: presentedFrames.length,
+    first: presentedFrames[0],
+    last: presentedFrames.at(-1),
+    maximumGap: maximumPresentedFrameGap,
+    largestGaps: presentedFrameGaps.filter(({ gap }) => gap === maximumPresentedFrameGap).slice(0, 12),
+    firstPresentedCallbacks: presentedFrameMetadata.slice(0, 8),
+  })}`);
   expect(presentedFrames.length, 'the browser should present frames throughout the full 23-second source clip')
     .toBeGreaterThanOrEqual(650);
   expect(presentedFrames[0]).toBeLessThanOrEqual(5);
@@ -2949,7 +2978,10 @@ test('按原片重叠节奏拖动黄绿红并从 Level 1 进入 Level 2', async 
   console.log(`Level 1 overlap timing: ${JSON.stringify({ downs, green100, red34, red100, pointer: trace.pointer })}`);
   expect(green100.at, 'green should reach 100% after the red pointer-down').toBeGreaterThan(downs[2].at);
   expect(red34.at, 'red progress should begin after the red pointer-down').toBeGreaterThan(downs[2].at);
-  expect(Math.abs(green100.at - red34.at), 'source reaches green 100% and red 34% together').toBeLessThanOrEqual(100);
+  const pairedSourceMilestoneGapSeconds = Math.abs(green100.sourceTime - red34.sourceTime);
+  expect(pairedSourceMilestoneGapSeconds,
+    `green 100% and red 34% should land near the same 4.0 s source moment; observed ${pairedSourceMilestoneGapSeconds.toFixed(3)} s apart`)
+    .toBeLessThanOrEqual(0.1 + (1 / 60));
   expect(Math.abs(green100.sourceTime - 4.0), `green 100% should align to source time 4.0s, got ${green100.sourceTime}s`).toBeLessThanOrEqual(0.1);
   expect(Math.abs(red34.sourceTime - 4.0), `red 34% should align to source time 4.0s, got ${red34.sourceTime}s`).toBeLessThanOrEqual(0.1);
   expect(red100.at).toBeGreaterThan(red34.at);
@@ -3899,6 +3931,10 @@ test('Level 8 洋红槽真实拖动后逐帧播放并对齐原作片段', async 
   await expect.poll(() => sourceVideo.evaluate((video) => (
     video.readyState >= 2 && video.videoWidth === 541 && video.videoHeight === 695
   ))).toBe(true);
+  const sourceAudio = page.locator('#level-eight-source-audio');
+  await expect.poll(() => sourceAudio.evaluate((audioElement) => (
+    audioElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !audioElement.error
+  ))).toBe(true);
 
   await page.evaluate(() => {
     window.__levelEightSourcePlaybackFrames = [];
@@ -3923,7 +3959,9 @@ test('Level 8 洋红槽真实拖动后逐帧播放并对齐原作片段', async 
   await dragAt60Hz(page, 467, 798, 467, 724, 216);
   await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-eight-source-frame')))
     .toBeGreaterThan(6);
-  const sourceAudio = page.locator('#level-eight-source-audio');
+  await expect.poll(() => sourceAudio.evaluate((audioElement) => (
+    !audioElement.paused && !audioElement.muted
+  )), { timeout: 2_000 }).toBe(true);
   const audioDuringPlayback = await sourceAudio.evaluate((audioElement) => ({
     paused: audioElement.paused,
     muted: audioElement.muted,
