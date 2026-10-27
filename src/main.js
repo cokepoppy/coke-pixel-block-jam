@@ -1732,31 +1732,47 @@ function drawBucket(bucket, lockedPreview = false) {
         sourcePileUsed = true;
         continue;
       }
-      const fragmentCount = state.game.level === 1 ? Math.round(count * 1.45) : Math.round(count * 3.2);
+      const levelTwoPacked = state.game.level === 2;
+      const fragmentCount = state.game.level === 1
+        ? Math.round(count * 1.45)
+        : Math.round(count * (levelTwoPacked ? 2.05 : 3.2));
       const fillHeight = cavity.height * Math.pow(progress / 100, state.game.level === 1 ? 0.16 : 0.22);
       const levelOneRowStep = cavity.height / Math.max(slot.rows, Math.ceil(fragmentCount / slot.columns));
+      const pileColumns = levelTwoPacked ? Math.max(8, Math.floor(cavity.width / 10)) : 0;
       const pieces = Array.from({ length: fragmentCount }, (_, index) => {
         const levelOnePacked = state.game.level === 1;
+        const levelTwoRow = levelTwoPacked ? Math.floor(index / pileColumns) : 0;
+        const levelTwoColumn = levelTwoPacked
+          ? (((index % pileColumns) * 7) + (levelTwoRow * 3)) % pileColumns
+          : 0;
         const row = Math.floor(index / slot.columns);
         const column = (index * 7 + row * 3) % slot.columns;
-        const columnStep = cavity.width / slot.columns;
+        const columnStep = cavity.width / (levelTwoPacked ? pileColumns : slot.columns);
         const rowStep = cavity.height / slot.rows;
         const size = levelOnePacked
           ? Math.min(17, columnStep, rowStep) * (0.94 + noise(index, 1) * 0.25)
-          : 7 + noise(index, 1) * 6;
+          : levelTwoPacked ? 8 + noise(index, 1) * 4.5 : 7 + noise(index, 1) * 6;
         const heightOffset = noise(index, 3) ** 0.82 * fillHeight;
+        const levelTwoMound = levelTwoPacked
+          ? (1 - Math.abs(((levelTwoColumn + 0.5) / pileColumns) * 2 - 1)) * Math.min(8, cavity.height * 0.12)
+          : 0;
         const x = levelOnePacked
           ? cavity.x + (column + 0.5) * columnStep + (noise(index, 2) - 0.5) * columnStep * 0.4
-          : cavity.x + 4 + noise(index, 2) * (cavity.width - 8);
+          : levelTwoPacked
+            ? cavity.x + (levelTwoColumn + 0.5) * columnStep + (noise(index, 2) - 0.5) * columnStep * 0.34
+            : cavity.x + 4 + noise(index, 2) * (cavity.width - 8);
         const y = levelOnePacked
           ? cavity.y + (row + 0.5) * levelOneRowStep + (noise(index, 3) - 0.5) * levelOneRowStep * 0.4
-          : cavity.y + cavity.height - 4 - heightOffset;
+          : levelTwoPacked
+            ? cavity.y + cavity.height - 4 - (levelTwoRow * 8.5) - levelTwoMound + (noise(index, 3) - 0.5) * 2.5
+            : cavity.y + cavity.height - 4 - heightOffset;
         return {
           x,
           y,
           size,
-          angle: (noise(index, 4) - 0.5) * Math.PI * (levelOnePacked ? 0.55 : 0.9),
-          alpha: (levelOnePacked ? 0.9 : 0.82) + noise(index, 5) * (levelOnePacked ? 0.1 : 0.18),
+          angle: (noise(index, 4) - 0.5) * Math.PI * (levelOnePacked ? 0.55 : levelTwoPacked ? 0.8 : 0.9),
+          alpha: (levelOnePacked ? 0.9 : levelTwoPacked ? 0.88 : 0.82)
+            + noise(index, 5) * (levelOnePacked ? 0.1 : levelTwoPacked ? 0.12 : 0.18),
           serial: serial++,
         };
       }).sort((a, b) => a.y - b.y);
