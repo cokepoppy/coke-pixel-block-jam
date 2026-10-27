@@ -2280,7 +2280,7 @@ test('Level 2 开局棋盘与录屏裁切逐像素一致', async ({ page }) => {
   expect(diff, `Level 2 board changed at ${diff} of ${actual.info.width * actual.info.height} pixels`).toBe(0);
 });
 
-test('Level 2 拖进同色像素区即可收集，绿色操作不会误清红黄像素', async ({ page }) => {
+test('Level 2 槽位停在像素墙下沿收集，绿色操作不会误清红黄像素', async ({ page }) => {
   test.setTimeout(25_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -2291,8 +2291,7 @@ test('Level 2 拖进同色像素区即可收集，绿色操作不会误清红黄
     Number(element.dataset[`progress${name[0].toUpperCase()}${name.slice(1)}`])
   ), color);
 
-  // Release the green L slot inside its green wall area, away from the
-  // source-timed dock coordinate used by the recorded demonstration.
+  // Drag above the wall; the green tray must stop at its observed rim limit.
   await dragThroughAt60Hz(page, 100, 750, [{ x: 100, y: 467, durationMs: 400 }]);
   await expect.poll(() => progress('green'), { timeout: 3_000 }).toBe(100);
   expect(await progress('red')).toBe(0);
@@ -2303,7 +2302,7 @@ test('Level 2 拖进同色像素区即可收集，绿色操作不会误清红黄
   expect(await progress('green')).toBe(100);
   expect(await progress('yellow')).toBe(0);
 
-  await dragThroughAt60Hz(page, 300, 875, [{ x: 348, y: 494, durationMs: 400 }]);
+  await dragThroughAt60Hz(page, 300, 875, [{ x: 304, y: 494, durationMs: 400 }]);
   await expect(page.locator('#live-status')).toContainText('第 3 关开始', { timeout: 10_000 });
   expect(pageErrors, 'non-dock Level 2 drags must keep the animation loop running').toEqual([]);
 });
@@ -2329,7 +2328,7 @@ test('Level 2 快速连续拖动会退出源片锁位并按实际落槽完成', 
   await expect.poll(() => canvas.evaluate((element) => Number(element.dataset.progressGreen)))
     .toBeGreaterThan(0);
 
-  await dragToDock(300, 875, 199, 564);
+  await dragToDock(300, 875, 304, 564);
   await expect(page.locator('#live-status')).toContainText('第 3 关开始', { timeout: 12_000 });
 });
 

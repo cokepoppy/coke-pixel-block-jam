@@ -146,7 +146,7 @@ test('真实鼠标从 Level 1 进入 Level 2 并拖动三色通关，保存浏�
     progress: await progress(),
   });
 
-  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 348, y: 494 });
+  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 304, y: 494 });
   await expect.poll(progress, { timeout: 8_000 }).toMatchObject({ green: 100, red: 100, yellow: 100 });
   await saveFrame('level2-completed-before-transition');
   observations.push({

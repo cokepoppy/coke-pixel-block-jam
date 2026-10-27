@@ -1075,8 +1075,13 @@ function drawPixelWall() {
           const cellBottom = y + Math.round((row + 1) * height / rows);
           const cellWidth = cellRight - px;
           const cellHeight = cellBottom - py;
-          ctx.fillStyle = '#86c9e8';
-          ctx.fillRect(px, py, cellWidth, cellHeight);
+          if (levelTwoGameplayBackgroundImage.complete && levelTwoGameplayBackgroundImage.naturalWidth > 0) {
+            ctx.drawImage(levelTwoGameplayBackgroundImage, px - 17, py - 310, cellWidth, cellHeight,
+              px, py, cellWidth, cellHeight);
+          } else {
+            ctx.fillStyle = '#347fc3';
+            ctx.fillRect(px, py, cellWidth, cellHeight);
+          }
           if (cell) drawPixelCell(px + 0.35, py + 0.35, cellWidth - 0.7, cellHeight - 0.7, cell.color, row * cols + column);
         }
       }
@@ -2806,11 +2811,31 @@ function advanceLevelTwoCollectionProgress(now) {
       const reposition = Math.max(0, Math.min(1, (elapsedMs - 400) / 600));
       bucket.y = 520 + 10 * reposition;
     }
-    const sourceProgress = levelTwoSourceProgressAt(bucket.color, elapsedMs);
-    const targetCollected = Math.min(total, Math.round(total * sourceProgress / 100));
-    const remaining = targetCollected - state.game.bucketCollected[bucket.id];
+    let remaining;
+    let acceptsCell = () => true;
+    if (state.levelTwoSourceTimeline) {
+      const sourceProgress = levelTwoSourceProgressAt(bucket.color, elapsedMs);
+      const targetCollected = Math.min(total, Math.round(total * sourceProgress / 100));
+      remaining = targetCollected - state.game.bucketCollected[bucket.id];
+    } else {
+      // In the recording the tray rests at the bottom of the wall and only
+      // pixels above its opening fall into it. The free route uses that same
+      // boundary; the unobserved rate is an approximation of the source.
+      const delta = Math.min(50, Math.max(0, now - (bucket.freeCollectionAt ?? now)));
+      bucket.freeCollectionAt = now;
+      const atWallEdge = bucket.y <= LEVEL_TWO_DRAG_TOP[bucket.color] + 14;
+      acceptsCell = (cell) => cell.x >= bucket.x - 5 && cell.x <= bucket.x + bucket.width + 5;
+      const hasPixelsAbove = atWallEdge && state.game.grid.some((cell) => cell
+        && cell.targetBucketId === bucket.id && acceptsCell(cell));
+      const duration = { green: 1200, red: 5700, yellow: 3100 }[bucket.color];
+      bucket.freeCollectionCredit = hasPixelsAbove
+        ? (bucket.freeCollectionCredit ?? 0) + total * delta / duration
+        : 0;
+      remaining = Math.floor(bucket.freeCollectionCredit);
+    }
     if (remaining > 0) {
-      const cells = fillBucket(state.game, bucket.id, remaining);
+      const cells = fillBucket(state.game, bucket.id, remaining, acceptsCell);
+      if (!state.levelTwoSourceTimeline) bucket.freeCollectionCredit -= cells.length;
       state.moveCollected += cells.length;
       addCollectedEffects(cells, now, bucket, { createParticles: !state.levelTwoSourceTimeline });
     }
@@ -3698,6 +3723,7 @@ function drawScene(now) {
     canvas.dataset.progressRed = String(getProgress(state.game, 'red'));
     canvas.dataset.progressGreen = String(getProgress(state.game, 'green'));
     canvas.dataset.progressYellow = String(getProgress(state.game, 'yellow'));
+    canvas.dataset.levelTwoBuckets = JSON.stringify(state.game.buckets.map(({ id, x, y, width, height }) => ({ id, x, y, width, height })));
   }
   if (state.game.level === 3) {
     canvas.dataset.progressPurple = String(getProgress(state.game, 'purple'));
@@ -3871,9 +3897,14 @@ function clampBucketPosition(bucket, x, y) {
   const topAllowance = state.game.config.dragTopAllowance ?? 0;
   return {
     x: Math.max(frame.x + inset, Math.min(frame.x + frame.width - inset - bucket.width, x)),
-    y: Math.max(frame.y + inset - topAllowance, Math.min(frame.y + frame.height - inset - bucket.height, y)),
+    y: Math.max(state.game.level === 2 ? LEVEL_TWO_DRAG_TOP[bucket.color] : frame.y + inset - topAllowance,
+      Math.min(frame.y + frame.height - inset - bucket.height, y)),
   };
 }
+
+// Green's raised rim briefly reaches y=493 in the supplied source at 12.2 s;
+// the other trays stay at the wall's lower edge, around y=520–533.
+const LEVEL_TWO_DRAG_TOP = { green: 493, red: 520, yellow: 520 };
 
 const LEVEL_TWO_DOCKS = {
   green: { x: 50, y: 493 },
@@ -3893,7 +3924,8 @@ function leaveLevelTwoSourceSequence() {
   levelTwoSourceGameplayVideo.pause();
   resetLevelTwoSourceAudio();
   audio.setSourceMixMode(false);
-  liveStatus.textContent = '自由操作：把颜色槽拖到上方同色像素区';
+  for (const bucket of state.game.buckets) bucket.freeCollectionAt = performance.now();
+  liveStatus.textContent = '自由操作：把颜色槽移到同色像素下方';
 }
 
 function dockLevelTwoBucket(bucket, startedAt) {
@@ -3902,19 +3934,25 @@ function dockLevelTwoBucket(bucket, startedAt) {
   const atYellowRepositionDock = bucket.color === 'yellow'
     && bucket.sourceCollectionActive
     && Math.hypot(bucket.x - 250, bucket.y - 530) <= 30;
-  if (!atSourceDock && !atYellowRepositionDock) return false;
+  const atWallEdge = bucket.y <= LEVEL_TWO_DRAG_TOP[bucket.color] + 14;
+  const hasPixelsAbove = state.game.grid.some((cell) => cell && cell.targetBucketId === bucket.id
+    && cell.x >= bucket.x - 5 && cell.x <= bucket.x + bucket.width + 5);
+  const atPlayableDock = atWallEdge && hasPixelsAbove;
+  if (!atSourceDock && !atYellowRepositionDock && !atPlayableDock) return false;
+  if (state.levelTwoSourceTimeline && !atSourceDock && !atYellowRepositionDock) leaveLevelTwoSourceSequence();
   if (!bucket.sourceCollectionActive) {
     const firstBucketMove = state.game.moves === 0;
     state.game.moves += 1;
-    if (firstBucketMove && bucket.color === 'red' && !state.levelTwoInteractive) {
+    if (firstBucketMove && bucket.color === 'red' && atSourceDock && !state.levelTwoInteractive) {
       state.levelTwoSourceTimeline = { startedAt, pausedAt: null, seeking: false };
       audio.setSourceMixMode(true);
-    } else if (firstBucketMove && bucket.color !== 'red') {
+    } else if (firstBucketMove) {
       state.levelTwoInteractive = true;
     }
   }
   bucket.sourceCollectionActive = true;
   bucket.sourceProgressStartedAt ??= startedAt;
+  bucket.freeCollectionAt = performance.now();
   return true;
 }
 
@@ -3961,7 +3999,7 @@ function onPointerDown(event) {
   if (state.game.level === 2 && !state.levelTwoSourceTimeline
       && !state.levelTwoInteractive && bucket.color !== 'red') {
     state.levelTwoInteractive = true;
-    liveStatus.textContent = '自由操作：把颜色槽拖到上方同色像素区';
+    liveStatus.textContent = '自由操作：把颜色槽移到同色像素下方';
   }
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
@@ -4051,14 +4089,8 @@ function onPointerMove(event) {
       bucket.y = bucket.sweep ? Math.max(next.y, wallBottom + 9) : next.y;
       if (!bucket.sweep && bucket.y <= wallBottom + 64) startLevelOneSweep(bucket, performance.now());
     } else if (state.game.level === 2) {
-      const previous = { x: bucket.x, y: bucket.y };
       bucket.x = next.x;
       bucket.y = next.y;
-      if (state.levelTwoInteractive && !state.levelTwoSourceTimeline) {
-        const cells = collectAlongPath(state.game, bucket.id, previous, next);
-        if (cells.length) bucket.sourceProgressStartedAt ??= state.dragStartedAt;
-        addCollectedEffects(cells, performance.now(), bucket);
-      }
       if (bucket.color === 'green') {
         const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
         setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
@@ -4398,23 +4430,13 @@ function onPointerUp(event) {
     if (state.game.level === 2 && !levelTwoDocked && state.levelTwoSourceTimeline) {
       leaveLevelTwoSourceSequence();
     }
-    if (state.game.level === 2 && !levelTwoDocked && state.moveCollected === 0) {
-      const cells = collectAlongPath(state.game, bucket.id, state.dragOrigin, { x: bucket.x, y: bucket.y });
-      if (cells.length) bucket.sourceProgressStartedAt ??= state.dragStartedAt;
-      addCollectedEffects(cells, performance.now(), bucket);
-    }
     if (acceptedLevelThreeSource) {
       // The recorded source track continues the exact, observed first move.
     } else if (levelTwoDocked) {
       liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
-    } else if (state.game.level === 2 && state.moveCollected > 0) {
+    } else if (state.game.level === 2) {
       state.levelTwoInteractive = true;
-      if (!bucket.sourceCollectionActive) {
-        if (state.game.moves === 0) state.game.moves += 1;
-        bucket.sourceCollectionActive = true;
-        bucket.sourceProgressStartedAt ??= state.dragStartedAt;
-      }
-      liveStatus.textContent = `正在收集${colorName(bucket.color)}像素块，进度 ${getProgress(state.game, bucket.id)}%`;
+      liveStatus.textContent = `已移动${colorName(bucket.color)}收集槽`;
     } else if (state.moveCollected === 0 && state.game.status !== 'won') {
       bucket.x = state.dragOrigin.x;
       bucket.y = state.dragOrigin.y;

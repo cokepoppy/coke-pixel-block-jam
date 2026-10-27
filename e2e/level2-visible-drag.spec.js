@@ -53,19 +53,18 @@ test('Level 2 原作回放中可抓取可见槽位并继续拖动通关', async 
   await page.screenshot({ path: testInfo.outputPath('level2-moving-green-slot.png') });
 
   // The point lies inside the green slot as rendered by the source video;
-  // dragging it upward should enter the green pixel area and interrupt the
-  // scripted presentation into playable manual input.
-  await dragCanvasPath(page, { x: 100, y: 510 }, { x: 100, y: 365 }, 300);
+  // A sideways move at the wall edge takes over from the source presentation.
+  await dragCanvasPath(page, { x: 100, y: 510 }, { x: 170, y: 510 }, 300);
   await expect.poll(async () => (await progress()).green, { timeout: 2_000 })
     .toBeGreaterThan(0);
   await expect.poll(() => sourceVideo.evaluate((element) => element.paused)).toBe(true);
   const afterGreen = await progress();
   const greenDragFrame = await page.screenshot({ path: testInfo.outputPath('level2-after-visible-green-drag.png') });
 
-  // Let the already-started red collection and this manual green collection
-  // settle, then perform the yellow move with a visible mouse drag as well.
+  // Move the green tray back beneath the leftmost remaining pixels.
+  await dragCanvasPath(page, { x: 170, y: 510 }, { x: 100, y: 510 }, 300);
   await expect.poll(() => progress(), { timeout: 8_000 }).toMatchObject({ green: 100, red: 100, yellow: 0 });
-  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 348, y: 494 }, 400);
+  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 304, y: 494 }, 400);
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 12_000 });
 
   const savedVideo = new URL('level2-visible-green-drag.webm', evidenceDirectory);

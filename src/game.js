@@ -363,11 +363,11 @@ const levels = {
     paint(column, row) {
       if (row < 7) {
         if (column < 7) return { color: 'green', targetBucketId: 'green' };
-        if (column < 23) return { color: 'yellow', targetBucketId: 'yellow' };
+        if (column < 22) return { color: 'yellow', targetBucketId: 'yellow' };
         return { color: 'red', targetBucketId: 'red' };
       }
       if (column < 15) return { color: 'green', targetBucketId: 'green' };
-      if (column < 31) return { color: 'yellow', targetBucketId: 'yellow' };
+      if (column < 30) return { color: 'yellow', targetBucketId: 'yellow' };
       return { color: 'red', targetBucketId: 'red' };
     },
   },
@@ -919,14 +919,14 @@ export function collectAt(state, bucketId, x, y) {
   return found;
 }
 
-export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY) {
+export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY, acceptCell = () => true) {
   const bucket = getBucket(state, bucketId);
   if (!bucket || !bucket.visible) return [];
   const found = [];
   for (let index = 0; index < state.grid.length; index += 1) {
     if (found.length >= limit) break;
     const cell = state.grid[index];
-    if (!cell || cell.targetBucketId !== bucket.id || cell.color !== bucket.color) continue;
+    if (!cell || cell.targetBucketId !== bucket.id || cell.color !== bucket.color || !acceptCell(cell)) continue;
     state.grid[index] = null;
     state.collected[cell.color] += 1;
     state.bucketCollected[bucket.id] += 1;
