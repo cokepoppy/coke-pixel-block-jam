@@ -237,6 +237,29 @@ async function playClearRoute(page, level, actions) {
     return;
   }
 
+  if (level === 11) {
+    const progressReward = page.getByRole('dialog', { name: '做得好！' });
+    await expect(progressReward).toBeVisible();
+    await expect.poll(() => progressReward.getByRole('progressbar', { name: /功能解锁进度/ }).getAttribute('aria-valuenow'))
+      .toBe('100');
+    const progressClaim = progressReward.getByRole('button', { name: /领取并继续/ });
+    await expect(progressClaim).toHaveCSS('opacity', '1');
+    await progressClaim.click();
+
+    const featureReward = page.getByRole('dialog', { name: '做得好！' });
+    await expect(featureReward.getByText('双层方块')).toBeVisible();
+    await expect(featureReward.getByText('先填满内层方块，解锁下方外层')).toBeVisible();
+    const featureClaim = featureReward.getByRole('button', { name: /领取并继续/ });
+    await expect(featureClaim).toHaveCSS('opacity', '1');
+    await featureClaim.click();
+    await expect(page.locator('#live-status')).toHaveText('第 12 关开始');
+
+    const featureIntro = page.getByRole('dialog', { name: '解锁新功能' });
+    await expect(featureIntro.getByText('双层方块')).toBeVisible();
+    await featureIntro.getByRole('button', { name: '开始挑战' }).click();
+    return;
+  }
+
   const nextLevel = level + 1;
   await expect(page.getByRole('status', { name: `正在进入第 ${nextLevel} 关` })).toBeVisible();
   if (level === 13) return;

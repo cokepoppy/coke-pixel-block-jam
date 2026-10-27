@@ -4695,6 +4695,32 @@ test('Level 9 按录屏展示功能解锁进度并可领取进入下一关', asy
   await expect(page.locator('#live-status')).toHaveText('第 10 关开始');
 });
 
+test('Level 11 通关奖励推进到 100% 并领取双层方块', async ({ page }) => {
+  await page.goto('/?previewLevel=11&previewReward=1');
+
+  const reward = page.getByRole('dialog', { name: '做得好！' });
+  await expect(reward).toBeVisible();
+  const progress = reward.getByRole('progressbar', { name: /功能解锁进度/ });
+  await expect.poll(() => progress.getAttribute('aria-valuenow')).toBe('100');
+  await expect(reward.getByText('到达第 12 关！')).toBeVisible();
+
+  const progressClaim = reward.getByRole('button', { name: /领取并继续/ });
+  await expect(progressClaim).toHaveCSS('opacity', '1');
+  await progressClaim.click();
+  const unlocked = page.getByRole('dialog', { name: '做得好！' });
+  await expect(unlocked.getByText('双层方块')).toBeVisible();
+  await expect(unlocked.getByText('先填满内层方块，解锁下方外层')).toBeVisible();
+  const unlockClaim = unlocked.getByRole('button', { name: /领取并继续/ });
+  await expect(unlockClaim).toHaveCSS('opacity', '1');
+  await unlockClaim.click();
+
+  await expect(page.locator('#live-status')).toHaveText('第 12 关开始');
+  const intro = page.getByRole('dialog', { name: '解锁新功能' });
+  await expect(intro.getByText('双层方块')).toBeVisible();
+  await intro.getByRole('button', { name: '开始挑战' }).click();
+  await expect(page.locator('#dialog-layer')).toBeHidden();
+});
+
 test('Level 12 填满黄色内层后解锁紫色外层', async ({ page }) => {
   await page.goto('/?previewLevel=12');
   await drag(page, 298, 740, 298, 180);

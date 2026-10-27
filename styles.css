@@ -478,6 +478,83 @@ body {
 .reward-claim strong { font-size: clamp(38px, 9vw, 60px); text-shadow: 0 3px 0 #155b11; }
 .reward-claim-label { white-space: nowrap; font-size: clamp(14px, 3.7vw, 22px); font-weight: 1000; }
 
+.level-eleven-unlock .reward-feature-label { top: 28%; }
+
+.level-eleven-progress .reward-claim,
+.level-eleven-unlock .reward-claim {
+  animation-delay: 0s;
+  animation-duration: 450ms;
+}
+
+.double-block-reward-art {
+  position: absolute;
+  top: 34%;
+  left: 23%;
+  width: 54%;
+  height: 24%;
+  filter: drop-shadow(0 10px 6px #0009);
+}
+
+.double-block-reward-outer {
+  position: absolute;
+  right: 8%;
+  bottom: 0;
+  left: 8%;
+  height: 64%;
+  border: 7px solid #fff;
+  border-radius: 25px 25px 36px 36px;
+  background: linear-gradient(180deg, #435aff, #182ce4 74%, #10159a);
+  box-shadow: inset 0 6px 0 #a6b1ff, inset 0 -10px 0 #0b117e, 0 6px 0 #4e2b9a;
+}
+
+.double-block-reward-outer::before {
+  position: absolute;
+  top: -15px;
+  right: -8px;
+  left: -8px;
+  height: 25px;
+  border: 6px solid #fff;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #fff15e, #f6a910);
+  box-shadow: inset 0 4px 0 #fff8a2, 0 4px 0 #7551c2;
+  content: '';
+}
+
+.double-block-reward-inner {
+  position: absolute;
+  top: 0;
+  left: 26%;
+  width: 48%;
+  height: 48%;
+  border: 6px solid #fff;
+  border-bottom-width: 15px;
+  border-radius: 20px 20px 28px 28px;
+  background: linear-gradient(180deg, #fff476, #f5a707 72%, #d87505);
+  box-shadow: inset 0 5px 0 #fff9ad, 0 5px 0 #7e49b2;
+}
+
+.reward-double-block-name,
+.reward-double-block-description {
+  position: absolute;
+  left: 8%;
+  width: 84%;
+  margin: 0;
+  color: #fff;
+  text-shadow: 0 3px 2px #000b;
+}
+
+.reward-double-block-name {
+  top: 59%;
+  font-size: clamp(30px, 8vw, 50px);
+  font-weight: 1000;
+}
+
+.reward-double-block-description {
+  top: 65%;
+  font-size: clamp(19px, 4.6vw, 28px);
+  font-weight: 900;
+}
+
 .reward-confetti {
   position: absolute;
   inset: 0;

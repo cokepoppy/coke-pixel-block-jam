@@ -4301,6 +4301,7 @@ function showEndDialog() {
       void levelOneSourceAudio.play().catch(() => {});
     }
     if (state.game.level === 9) showFeatureReward();
+    else if (state.game.level === 11) showLevelElevenProgressReward();
     else showLevelTransition();
     return;
   }
@@ -4381,8 +4382,28 @@ function presentLevelTransition(sourceLevel) {
 }
 
 function showFeatureReward() {
+  showFeatureProgressReward({
+    initialPercent: 78,
+    targetPercent: 83,
+    unlockText: '到达第 12 关！',
+    action: 'next',
+    durationMs: 600,
+  });
+}
+
+function showLevelElevenProgressReward() {
+  showFeatureProgressReward({
+    initialPercent: 96,
+    targetPercent: 100,
+    unlockText: '到达第 12 关！',
+    action: 'feature-unlock',
+    durationMs: 500,
+  });
+}
+
+function createRewardConfetti() {
   const colors = ['#ffeb3b', '#62f324', '#20d4ff', '#ff3ca6', '#ff7f1f', '#a876ff'];
-  const confetti = Array.from({ length: 42 }, (_, index) => {
+  return Array.from({ length: 42 }, (_, index) => {
     const left = (index * 47 + 9) % 100;
     const delay = ((index * 29) % 38) / 10;
     const duration = 2.8 + ((index * 17) % 24) / 10;
@@ -4392,18 +4413,22 @@ function showFeatureReward() {
     const color = colors[index % colors.length];
     return `<i class="reward-confetti-piece" aria-hidden="true" style="--x:${left}%;--delay:${delay}s;--duration:${duration}s;--drift:${drift}px;--width:${width}px;--height:${height}px;--color:${color}"></i>`;
   }).join('');
+}
+
+function showFeatureProgressReward({ initialPercent, targetPercent, unlockText, action, durationMs }) {
+  const confetti = createRewardConfetti();
   dialogLayer.classList.add('reward-overlay');
   dialogLayer.innerHTML = `
-    <section class="reward-screen" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+    <section class="reward-screen ${action === 'feature-unlock' ? 'level-eleven-progress' : ''}" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
       <div class="reward-confetti" aria-hidden="true">${confetti}</div>
       <h1 class="reward-title" id="dialog-title">做得好！</h1>
       <p class="reward-feature-label">下一项功能</p>
-      <div class="reward-meter" role="progressbar" aria-label="功能解锁进度 78%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="78">
+      <div class="reward-meter" role="progressbar" aria-label="功能解锁进度 ${initialPercent}%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${initialPercent}">
         <div class="reward-meter-rim"><div class="reward-meter-fill"></div></div>
-        <div class="reward-meter-base"><strong>78%</strong></div>
+        <div class="reward-meter-base"><strong>${initialPercent}%</strong></div>
       </div>
-      <p class="reward-unlock-text">到达第 12 关！</p>
-      <button class="reward-claim" type="button" data-action="next">
+      <p class="reward-unlock-text">${unlockText}</p>
+      <button class="reward-claim" type="button" data-action="${action}">
         <span class="reward-coin" aria-hidden="true">★</span><strong>20</strong><span class="reward-claim-label">领取并继续</span>
       </button>
     </section>`;
@@ -4414,12 +4439,12 @@ function showFeatureReward() {
   const fill = dialogLayer.querySelector('.reward-meter-fill');
   const label = dialogLayer.querySelector('.reward-meter-base strong');
   const startAt = performance.now();
-  const duration = prefersReducedMotion.matches ? 0 : 600;
+  const duration = prefersReducedMotion.matches ? 0 : durationMs;
   const animateProgress = (now) => {
     if (!dialogLayer.classList.contains('reward-overlay')) return;
     const fraction = duration === 0 ? 1 : Math.min(1, (now - startAt) / duration);
     const eased = 1 - ((1 - fraction) ** 2);
-    const value = Math.round(78 + (83 - 78) * eased);
+    const value = Math.round(initialPercent + (targetPercent - initialPercent) * eased);
     fill.style.transform = `scaleX(${value / 100})`;
     label.textContent = `${value}%`;
     meter.setAttribute('aria-valuenow', String(value));
@@ -4427,6 +4452,29 @@ function showFeatureReward() {
     if (fraction < 1) requestAnimationFrame(animateProgress);
   };
   requestAnimationFrame(animateProgress);
+}
+
+function showLevelElevenFeatureUnlock() {
+  const confetti = createRewardConfetti();
+  dialogLayer.classList.add('reward-overlay');
+  dialogLayer.innerHTML = `
+    <section class="reward-screen level-eleven-unlock" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="reward-confetti" aria-hidden="true">${confetti}</div>
+      <h1 class="reward-title" id="dialog-title">做得好！</h1>
+      <p class="reward-feature-label">下一项功能</p>
+      <div class="double-block-reward-art" aria-hidden="true">
+        <div class="double-block-reward-outer"></div>
+        <div class="double-block-reward-inner"></div>
+      </div>
+      <h2 class="reward-double-block-name">双层方块</h2>
+      <p class="reward-double-block-description">先填满内层方块，解锁下方外层</p>
+      <button class="reward-claim" type="button" data-action="next">
+        <span class="reward-coin" aria-hidden="true">★</span><strong>20</strong><span class="reward-claim-label">领取并继续</span>
+      </button>
+    </section>`;
+  dialogLayer.hidden = false;
+  dialogLayer.querySelector('button')?.focus();
+  dialogLayer.addEventListener('click', onDialogClick);
 }
 
 function onDialogClick(event) {
@@ -4458,6 +4506,8 @@ function onDialogClick(event) {
   } else if (action === 'restart') {
     restartCurrentLevel();
     audio.setPaused(false);
+  } else if (action === 'feature-unlock') {
+    showLevelElevenFeatureUnlock();
   } else if (action === 'next') {
     advanceToNextLevel();
   }
@@ -4619,7 +4669,7 @@ if (state.loading) {
   if (initialLevel !== 1) liveStatus.textContent = `第 ${initialLevel} 关开始`;
 }
 updateBoosterControls();
-if (requestedPreviewReward && initialLevel === 9) {
+if (requestedPreviewReward && [9, 11].includes(initialLevel)) {
   state.game.grid = state.game.grid.map(() => null);
   state.game.timeRemaining = 138;
   for (const bucket of state.game.buckets) bucket.visible = false;
