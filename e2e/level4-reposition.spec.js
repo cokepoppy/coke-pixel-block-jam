@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
@@ -9,11 +9,19 @@ const levelFourSourcePanel = await sharp(fileURLToPath(new URL('../assets/level4
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true });
+const levelFourSourceFrame = await sharp(fileURLToPath(new URL('../assets/level4/level4-frame-55.5.png', import.meta.url)))
+  .ensureAlpha()
+  .raw()
+  .toBuffer({ resolveWithObject: true });
+
+test.use({ video: { mode: 'on', size: canvasSize } });
 
 async function readLevelFourState(page) {
   return page.locator('#game-canvas').evaluate((canvas) => ({
     buckets: JSON.parse(canvas.dataset.levelFourBuckets ?? '[]'),
     remainingCells: Number(canvas.dataset.levelFourRemainingCells),
+    sourceActive: canvas.dataset.levelFourSourceActive === 'true',
+    sourceTime: Number(canvas.dataset.levelFourSourceTime),
   }));
 }
 
@@ -32,7 +40,11 @@ async function dragBucket(page, from, to, size = 166) {
   await page.mouse.up();
 }
 
-test('Level 4 可以在墙下整理收集槽，零进度移动不会回弹或清空像素', async ({ page }) => {
+test('Level 4 的真实拖动路线按源帧播放像素下落并进入 Level 5', async ({ page }) => {
+  test.setTimeout(45_000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const video = page.video();
   await page.goto('/?previewLevel=4');
   const canvas = page.locator('#game-canvas');
   await expect(canvas).toHaveAttribute('aria-label', '拖动收集槽收集彩色像素方块');
@@ -93,37 +105,134 @@ test('Level 4 可以在墙下整理收集槽，零进度移动不会回弹或清
   const finalScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
   await writeFile(`${recordingDir}/layout.json`, JSON.stringify({ initialBox, finalBox, initialScroll, finalScroll }, null, 2));
 
-  const redStart = { x: 216, y: 465 };
-  await dragBucket(page, redStart, { x: 381, y: 317 }, 176);
-  await expect.poll(async () => (
-    (await readLevelFourState(page)).buckets.find((bucket) => bucket.id === 'red-top')?.progress ?? 0
-  )).toBeGreaterThan(0);
-  const afterCollection = await readLevelFourState(page);
-  expect(afterCollection.buckets.find((bucket) => bucket.id === 'red-right')?.progress).toBe(0);
-  expect(afterCollection.remainingCells).toBeLessThan(before.remainingCells);
+  await dragBucket(page, { x: 216, y: 637 }, { x: 381, y: 637 });
+  await expect(canvas).toHaveAttribute('data-level-four-source-active', 'true');
+  await expect.poll(async () => Number(await canvas.getAttribute('data-level-four-source-time')))
+    .toBeGreaterThan(1);
+  const sourceAudio = page.locator('#level-four-source-audio');
+  await expect.poll(() => sourceAudio.evaluate((element) => element.currentTime), { timeout: 5_000 })
+    .toBeGreaterThan(1);
+  await expect.poll(() => sourceAudio.evaluate((element) => ({ paused: element.paused, muted: element.muted })))
+    .toEqual({ paused: false, muted: false });
+
+  // Freeze the source-timed panel through Settings and compare it with the
+  // original S5 00:55.5 panel frame at the same media time.
+  await page.locator('#settings-button').click();
+  await expect(page.getByRole('dialog', { name: '游戏设置' })).toBeVisible();
+  await expect.poll(() => sourceAudio.evaluate((element) => ({ paused: element.paused, muted: element.muted })))
+    .toEqual({ paused: true, muted: true });
+  await page.evaluate(() => {
+    document.querySelector('#level-four-source-gameplay-video').currentTime = 1;
+  });
+  await page.waitForFunction(() => {
+    const source = document.querySelector('#level-four-source-gameplay-video');
+    return Math.abs(source.currentTime - 1) < 0.01 && !source.seeking;
+  });
+  const sourceMatchDataUrl = await canvas.evaluate((element) => element.toDataURL('image/png'));
+  const sourceMatchScreenshot = Buffer.from(sourceMatchDataUrl.split(',')[1], 'base64');
+  await writeFile(`${recordingDir}/source-frame-55.5-browser.png`, sourceMatchScreenshot);
+  const sourceMatchPanel = await sharp(sourceMatchScreenshot)
+    .extract({ left: 17, top: 285, width: 563, height: 706 })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const sourceFrameDiff = pixelmatch(
+    levelFourSourceFrame.data,
+    sourceMatchPanel.data,
+    Buffer.alloc(sourceMatchPanel.data.length),
+    sourceMatchPanel.info.width,
+    sourceMatchPanel.info.height,
+    { threshold: 0.12, includeAA: false },
+  );
+  const sourceFrameDiffRatio = sourceFrameDiff / (563 * 706);
+  expect(sourceFrameDiffRatio, 'the 55.5 s source action frame should remain aligned in the browser panel')
+    .toBeLessThan(0.015);
+
+  await page.getByRole('button', { name: '继续游戏' }).click();
+  await expect.poll(async () => (await readLevelFourState(page)).sourceTime, { timeout: 5_000 }).toBeGreaterThan(1.5);
+  await expect.poll(() => sourceAudio.evaluate((element) => element.currentTime), { timeout: 5_000 })
+    .toBeGreaterThan(1.5);
+  await expect.poll(() => page.evaluate(() => {
+    const videoTime = Number(document.querySelector('#game-canvas').dataset.levelFourSourceTime);
+    const audioElement = document.querySelector('#level-four-source-audio');
+    return !audioElement.paused && !audioElement.muted && Math.abs(videoTime - audioElement.currentTime) < 0.15;
+  })).toBe(true);
+  const audioDrift = await page.evaluate(() => Math.abs(
+    Number(document.querySelector('#game-canvas').dataset.levelFourSourceTime)
+      - document.querySelector('#level-four-source-audio').currentTime,
+  ));
+  expect(audioDrift).toBeLessThan(0.15);
+  await expect.poll(async () => (await readLevelFourState(page)).buckets
+    .find((bucket) => bucket.id === 'blue-left')?.progress ?? 0, { timeout: 5_000 }).toBe(100);
+  await expect.poll(async () => (await readLevelFourState(page)).buckets
+    .find((bucket) => bucket.id === 'red-top')?.progress ?? 0, { timeout: 5_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => Number(await canvas.getAttribute('data-level-four-remaining-cells')))
+    .toBeLessThan(before.remainingCells);
+  await expect(page.locator('#live-status')).toHaveText('第 5 关开始', { timeout: 30_000 });
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: `${recordingDir}/level5-after-level4-source-route.png` });
+  const videoPath = await video.path();
+  await page.close();
+  await copyFile(videoPath, `${recordingDir}/level4-source-route.webm`);
+  await writeFile(`${recordingDir}/source-route-report.json`, JSON.stringify({
+    sourceMedia: 'S5 00:54.5–01:09.5',
+    route: 'five real lower-tray rearrangements then blue-left from (216,637) to (381,637)',
+    comparedSourceFrame: 'S5 00:55.5',
+    sourceFrameDiffRatio,
+    finalStatus: '第 5 关开始',
+    errors,
+  }, null, 2));
 });
 
-test('Level 4 的重复红蓝槽按原片上下层分别收集', async ({ page }) => {
+test('Level 4 原片路线播放时拖动可见槽会暂停源片并接回自由操作', async ({ page }) => {
+  await page.goto('/?previewLevel=4');
+  const canvas = page.locator('#game-canvas');
+  const rearrangements = [
+    [{ x: 50, y: 637 }, { x: 216, y: 637 }],
+    [{ x: 50, y: 801 }, { x: 50, y: 637 }],
+    [{ x: 216, y: 801 }, { x: 50, y: 801 }],
+    [{ x: 381, y: 801 }, { x: 216, y: 801 }],
+    [{ x: 381, y: 637 }, { x: 381, y: 801 }],
+  ];
+  for (const [from, to] of rearrangements) await dragBucket(page, from, to);
+  await dragBucket(page, { x: 216, y: 637 }, { x: 381, y: 637 });
+  await expect.poll(async () => (await readLevelFourState(page)).sourceTime, { timeout: 5_000 }).toBeGreaterThan(1);
+
+  const stateDuringPlayback = await readLevelFourState(page);
+  const redTop = stateDuringPlayback.buckets.find((bucket) => bucket.id === 'red-top');
+  expect(redTop).toBeTruthy();
+  await dragBucket(page, { x: redTop.x, y: redTop.y }, { x: redTop.x, y: 637 }, 176);
+
+  const stateAfterTakeover = await readLevelFourState(page);
+  expect(stateAfterTakeover.sourceActive).toBe(false);
+  expect(stateAfterTakeover.buckets.find((bucket) => bucket.id === 'red-top')?.y).toBeCloseTo(637, 3);
+  await expect(page.locator('#level-four-source-audio')).toHaveJSProperty('paused', true);
+  await expect(page.locator('#live-status')).toHaveText('已调整红色 收集槽位置');
+});
+
+test('Level 4 下方收集槽不会被拖进像素墙，红色中央槽保留原片起始高度', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/?previewLevel=4');
   await expect(page.locator('#live-status')).toHaveText('第 4 关开始');
-
-  await dragBucket(page, { x: 50, y: 637 }, { x: 381, y: 465 });
-  await expect.poll(async () => (await readLevelFourState(page)).buckets
-    .find((bucket) => bucket.id === 'blue-left')?.progress ?? 0).toBe(100);
+  const canvas = page.locator('#game-canvas');
+  const before = await readLevelFourState(page);
+  await dragBucket(page, { x: 50, y: 801 }, { x: 50, y: 300 });
   let state = await readLevelFourState(page);
-  expect(state.buckets.find((bucket) => bucket.id === 'blue-right')?.progress).toBe(0);
-  expect(state.buckets.filter((bucket) => bucket.id.startsWith('red-'))
-    .every((bucket) => bucket.progress === 0)).toBeTruthy();
-  expect(state.remainingCells).toBe(660);
+  expect(state.buckets.find((bucket) => bucket.id === 'green-bottom')?.y).toBe(637);
+  expect(state.remainingCells).toBe(before.remainingCells);
+  expect(state.buckets.every((bucket) => bucket.progress === 0)).toBe(true);
 
-  await dragBucket(page, { x: 216, y: 465 }, { x: 381, y: 317 }, 176);
-  await expect.poll(async () => (await readLevelFourState(page)).buckets
-    .find((bucket) => bucket.id === 'red-top')?.progress ?? 0).toBe(100);
+  await dragBucket(page, { x: 381, y: 637 }, { x: 381, y: 300 });
   state = await readLevelFourState(page);
-  expect(state.buckets.find((bucket) => bucket.id === 'red-right')?.progress).toBe(0);
-  expect(state.buckets.find((bucket) => bucket.id === 'blue-right')?.progress).toBe(0);
+  expect(state.buckets.find((bucket) => bucket.id === 'red-right')?.y).toBe(637);
+  expect(state.remainingCells).toBe(before.remainingCells);
+
+  await dragBucket(page, { x: 216, y: 465 }, { x: 216, y: 300 }, 176);
+  state = await readLevelFourState(page);
+  expect(state.buckets.find((bucket) => bucket.id === 'red-top')?.y).toBe(465);
+  expect(state.remainingCells).toBe(before.remainingCells);
+  await expect(canvas).toHaveAttribute('data-level-four-source-active', 'false');
   expect(errors).toEqual([]);
-  await page.screenshot({ path: '.research/recordings/level4-reposition/after-duplicate-target-drags.png' });
+  await page.screenshot({ path: '.research/recordings/level4-reposition/level-four-drag-limits.png' });
 });

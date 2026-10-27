@@ -181,6 +181,34 @@ async function playClearRoute(page, level, actions) {
     await expect.poll(() => page.locator('#game-canvas').evaluate((canvas) => (
       ['red', 'green', 'yellow'].map((color) => Number(canvas.dataset[`progress${color[0].toUpperCase()}${color.slice(1)}`]))
     ))).toEqual([100, 100, 100]);
+  } else if (level === 4) {
+    const dragBucket = async (from, to, size = 166) => {
+      const start = browserPoint({ x: from.x + size / 2, y: from.y + size / 2 });
+      const target = browserPoint({ x: to.x + size / 2, y: to.y + size / 2 });
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(target.x, target.y, { steps: 24 });
+      await page.mouse.up();
+    };
+    const rearrangements = [
+      [{ x: 50, y: 637 }, { x: 216, y: 637 }],
+      [{ x: 50, y: 801 }, { x: 50, y: 637 }],
+      [{ x: 216, y: 801 }, { x: 50, y: 801 }],
+      [{ x: 381, y: 801 }, { x: 216, y: 801 }],
+      [{ x: 381, y: 637 }, { x: 381, y: 801 }],
+    ];
+    for (const [from, to] of rearrangements) await dragBucket(from, to);
+
+    await dragBucket({ x: 216, y: 637 }, { x: 381, y: 637 });
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-four-source-active', 'true');
+    await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-four-source-time')))
+      .toBeGreaterThan(1);
+    await expect.poll(async () => Number(await page.locator('#game-canvas').evaluate((canvas) => {
+      const buckets = JSON.parse(canvas.dataset.levelFourBuckets ?? '[]');
+      return buckets.find((bucket) => bucket.id === 'blue-left')?.progress ?? 0;
+    }))).toBe(100);
+    await expect(page.locator('#live-status')).toHaveText('第 5 关开始', { timeout: 30_000 });
+    return;
   } else if (level === 8) {
     const dragSourceAction = async (from, to) => {
       const start = browserPoint(from);
@@ -275,7 +303,7 @@ test('真实拖动连续清空 Level 1–13 并进入通关转场', async ({ pag
   await page.goto('/?previewLevel=1');
 
   for (let level = 1; level <= 13; level += 1) {
-    const actions = level === 2 ? [] : planFullClear(level);
+    const actions = [2, 4].includes(level) ? [] : planFullClear(level);
     await playClearRoute(page, level, actions);
   }
 
