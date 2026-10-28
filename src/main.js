@@ -4737,11 +4737,6 @@ const LEVEL_TWO_DOCKS = {
   yellow: { x: 50, y: 520 },
 };
 
-const LEVEL_TWO_SOURCE_ACTION_WINDOWS = {
-  green: { earliestMs: 2_200, latestMs: 3_500 },
-  yellow: { earliestMs: 4_100, latestMs: 6_000 },
-};
-
 function leaveLevelTwoSourceSequence() {
   if (!state.levelTwoSourceTimeline) return;
   state.levelTwoSourceTimeline = null;
@@ -4826,14 +4821,11 @@ function onPointerDown(event) {
   }
   const bucket = getBucketAt(state.game, point.x, point.y);
   if (!bucket) return;
-  if (state.game.level === 2 && state.levelTwoSourceTimeline && !bucket.sourceCollectionActive) {
-    const actionWindow = LEVEL_TWO_SOURCE_ACTION_WINDOWS[bucket.color];
-    if (actionWindow) {
-      const elapsed = performance.now() - state.levelTwoSourceTimeline.startedAt;
-      if (elapsed < actionWindow.earliestMs || elapsed > actionWindow.latestMs) {
-        leaveLevelTwoSourceSequence();
-      }
-    }
+  if (state.game.level === 2 && state.levelTwoSourceTimeline && bucket.color !== 'red') {
+    // The recorded panel contains its own later tray movements. Once another
+    // tray is touched, expose the live tray immediately so the player's drag
+    // cannot be hidden behind the recording.
+    leaveLevelTwoSourceSequence();
   }
   if (state.game.level === 2 && !state.levelTwoSourceTimeline
       && !state.levelTwoInteractive && bucket.color !== 'red') {
@@ -4991,6 +4983,11 @@ function onPointerMove(event) {
       if (bucket.color === 'green') {
         const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
         setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
+      }
+      // In free play, begin receiving pixels as soon as the held tray reaches
+      // the wall edge; waiting for pointerup makes a held drag appear frozen.
+      if (state.levelTwoInteractive && !state.levelTwoSourceTimeline && !bucket.sourceCollectionActive) {
+        dockLevelTwoBucket(bucket, performance.now());
       }
     } else if (state.game.level === 4) {
       bucket.x = next.x;

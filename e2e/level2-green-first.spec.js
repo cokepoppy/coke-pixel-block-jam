@@ -36,3 +36,33 @@ test('第二关先拖绿槽到墙下即可收集，随后红黄槽仍可操作�
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 12_000 });
   expect(errors).toEqual([]);
 });
+
+test('触屏按住绿槽在墙下时持续收集，松手后红槽仍可拖动', async ({ page }) => {
+  test.setTimeout(25_000);
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?previewLevel=2');
+  await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
+  const canvas = page.locator('#game-canvas');
+  const bounds = await canvas.boundingBox();
+  const point = (x, y) => ({ x: bounds.x + x * bounds.width / 597, y: bounds.y + y * bounds.height / 1296, id: 1 });
+  const session = await page.context().newCDPSession(page);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const touch = (type, points) => session.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+  await touch('touchStart', [point(100, 750)]);
+  for (let step = 1; step <= 20; step += 1) {
+    await touch('touchMove', [point(100, 750 - step * 10)]);
+    await page.waitForTimeout(12);
+  }
+  await expect.poll(() => canvas.getAttribute('data-progress-green'), { timeout: 5_000 }).not.toBe('0');
+  await expect.poll(() => canvas.getAttribute('data-progress-green'), { timeout: 8_000 }).toBe('100');
+  expect(await canvas.getAttribute('data-progress-red')).toBe('0');
+  const green = await canvas.evaluate((el) => JSON.parse(el.dataset.levelTwoBuckets).find((bucket) => bucket.id === 'green'));
+  expect(green.y).toBeGreaterThanOrEqual(520);
+  await touch('touchEnd', []);
+  await touch('touchStart', [point(450, 750)]);
+  await touch('touchMove', [point(450, 550)]);
+  await touch('touchEnd', []);
+  await expect.poll(() => canvas.getAttribute('data-progress-red'), { timeout: 8_000 }).not.toBe('0');
+  expect(errors).toEqual([]);
+});

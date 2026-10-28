@@ -79,7 +79,15 @@ test('绿槽由玩家拖动后，黄槽仍要等到玩家操作才会移动', as
     const source = document.querySelector('#level-two-source-gameplay-video');
     return !source.paused && source.currentTime >= 2.35 && source.currentTime < 2.55;
   }, null, { timeout: 5_000 });
-  await dragCanvasPath(page, { x: 100, y: 750 }, { x: 100, y: 510 }, 120);
+  const bounds = await canvas.boundingBox();
+  const at = (x, y) => ({ x: bounds.x + x * bounds.width / 597, y: bounds.y + y * bounds.height / 1296 });
+  const from = at(100, 750), to = at(100, 550);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await expect(sourceVideo).toHaveJSProperty('paused', true);
+  await page.mouse.move(to.x, to.y, { steps: 20 });
+  await expect.poll(() => canvas.evaluate((el) => JSON.parse(el.dataset.levelTwoBuckets).find((b) => b.id === 'green').y)).toBeLessThan(560);
+  await page.mouse.up();
 
   await expect.poll(() => sourceVideo.evaluate(element => element.paused), { timeout: 5_000 }).toBe(true);
   const untouchedYellow = await canvas.evaluate(element => {
@@ -92,8 +100,8 @@ test('绿槽由玩家拖动后，黄槽仍要等到玩家操作才会移动', as
       sourceTime: document.querySelector('#level-two-source-gameplay-video').currentTime,
     };
   });
-  expect(untouchedYellow.sourceTime).toBeGreaterThanOrEqual(4.4);
-  expect(untouchedYellow.sourceTime).toBeLessThan(4.7);
+  expect(untouchedYellow.sourceTime).toBeGreaterThanOrEqual(2.3);
+  expect(untouchedYellow.sourceTime).toBeLessThan(3.0);
   expect(untouchedYellow.x).toBe(151);
   expect(untouchedYellow.y).toBe(831);
   expect(untouchedYellow.progress).toBe(0);

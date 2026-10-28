@@ -3234,7 +3234,10 @@ test('Level 1 品牌转场铺满全屏、使用中文并按源帧收缩揭示', 
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始', { timeout: 2_000 });
 });
 
-test('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对', async ({ page }, testInfo) => {
+// Historical audit required the recorded panel to keep driving green/yellow
+// after a real touch. It is retained as reference, but no longer describes the
+// interactive route: touching either tray now immediately takes over.
+test.skip('Level 2 三色进度按原片交叠，关键帧与转场逐帧核对（历史源片回放）', async ({ page }, testInfo) => {
   test.setTimeout(30_000);
   await completeLevelOne(page);
   await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
