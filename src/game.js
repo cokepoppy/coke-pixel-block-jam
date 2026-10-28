@@ -957,12 +957,13 @@ export function collectAt(state, bucketId, x, y) {
   return found;
 }
 
-export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY, acceptCell = () => true) {
+export function fillBucket(state, bucketId, limit = Number.POSITIVE_INFINITY, acceptCell = () => true, { bottomUp = false } = {}) {
   const bucket = getBucket(state, bucketId);
   if (!bucket || !bucket.visible) return [];
   const found = [];
-  for (let index = 0; index < state.grid.length; index += 1) {
+  for (let step = 0; step < state.grid.length; step += 1) {
     if (found.length >= limit) break;
+    const index = bottomUp ? state.grid.length - 1 - step : step;
     const cell = state.grid[index];
     if (!cellMatchesBucket(state, bucket, cell) || !acceptCell(cell)) continue;
     state.grid[index] = null;

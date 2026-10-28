@@ -51,46 +51,23 @@ test('Level 2 原作回放中可抓取可见槽位并继续拖动通关', async 
     const source = document.querySelector('#level-two-source-gameplay-video');
     return !source.paused && source.currentTime >= 2.35 && source.currentTime < 2.55;
   }, null, { timeout: 5_000 });
-  await dragCanvasPath(page, { x: 100, y: 750 }, { x: 100, y: 510 }, 120);
-  await page.waitForFunction(() => {
-    const source = document.querySelector('#level-two-source-gameplay-video');
-    return !source.paused && source.currentTime >= 3.05;
-  }, null, { timeout: 5_000 }).catch(async (error) => {
-    const observed = await page.evaluate(() => {
-      const source = document.querySelector('#level-two-source-gameplay-video');
-      const canvas = document.querySelector('#game-canvas');
-      return {
-        currentTime: source.currentTime,
-        paused: source.paused,
-        readyState: source.readyState,
-        duration: source.duration,
-        status: canvas.dataset.gameStatus,
-        buckets: JSON.parse(canvas.dataset.levelTwoBuckets ?? '[]'),
-        progress: {
-          green: canvas.dataset.progressGreen,
-          red: canvas.dataset.progressRed,
-          yellow: canvas.dataset.progressYellow,
-        },
-        liveStatus: document.querySelector('#live-status')?.textContent,
-      };
-    });
-    throw new Error(`${error.message}; observed=${JSON.stringify(observed)}`);
-  });
+  // Touching the still-visible green tray hands control back immediately.
+  await dragCanvasPath(page, { x: 100, y: 750 }, { x: 100, y: 550 }, 120);
+  await expect(sourceVideo).toHaveJSProperty('paused', true);
+  await expect.poll(async () => (await progress()).green, { timeout: 2_000 }).toBeGreaterThan(0);
   await page.screenshot({ path: testInfo.outputPath('level2-moving-green-slot.png') });
 
-  // The point lies inside the green slot as rendered by the source video;
-  // A sideways move at the wall edge takes over from the source presentation.
-  await dragCanvasPath(page, { x: 100, y: 510 }, { x: 170, y: 510 }, 300);
-  await expect.poll(async () => (await progress()).green, { timeout: 2_000 })
-    .toBeGreaterThan(0);
-  await expect.poll(() => sourceVideo.evaluate((element) => element.paused)).toBe(true);
+  // The tray remains movable sideways along the wall's lower edge.
+  await dragCanvasPath(page, { x: 100, y: 550 }, { x: 170, y: 550 }, 120);
   const afterGreen = await progress();
   const greenDragFrame = await page.screenshot({ path: testInfo.outputPath('level2-after-visible-green-drag.png') });
 
   // Move the green tray back beneath the leftmost remaining pixels.
-  await dragCanvasPath(page, { x: 170, y: 510 }, { x: 100, y: 510 }, 300);
+  await dragCanvasPath(page, { x: 170, y: 550 }, { x: 100, y: 550 }, 120);
   await expect.poll(() => progress(), { timeout: 8_000 }).toMatchObject({ green: 100, red: 100, yellow: 0 });
-  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 304, y: 494 }, 400);
+  await dragCanvasPath(page, { x: 300, y: 875 }, { x: 199, y: 550 }, 400);
+  await page.waitForTimeout(4_000);
+  await dragCanvasPath(page, { x: 199, y: 550 }, { x: 399, y: 550 }, 300);
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 12_000 });
 
   const savedVideo = new URL('level2-visible-green-drag.webm', evidenceDirectory);
@@ -98,7 +75,7 @@ test('Level 2 原作回放中可抓取可见槽位并继续拖动通关', async 
   await copyFile(await video.path(), savedVideo);
   await writeFile(new URL('after-visible-green-drag.png', evidenceDirectory), greenDragFrame);
   await writeFile(new URL('report.json', evidenceDirectory), `${JSON.stringify({
-    route: 'red docks and starts source playback; visible moved green tray is grabbed and dragged; red and green settle; yellow completes Level 2',
+    route: 'red starts source playback; touching green pauses playback and hands control to the player; green is moved sideways and back; yellow completes Level 2',
     capturedGreenProgressAfterDrag: afterGreen.green,
     capturedRedProgressAfterDrag: afterGreen.red,
     sourceVideoPausedAfterManualDrag: true,

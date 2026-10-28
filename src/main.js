@@ -301,6 +301,12 @@ const levelTwoGameplayBackgroundImage = new Image();
 levelTwoGameplayBackgroundImage.src = '/assets/level2/level2-gameplay-background.png';
 const levelTwoYellowBucketAtlasImage = new Image();
 levelTwoYellowBucketAtlasImage.src = '/assets/level2/level2-yellow-bucket-atlas.png';
+const levelTwoGreenBucketAtlasImage = new Image();
+levelTwoGreenBucketAtlasImage.src = '/assets/level2/level2-green-bucket-atlas.png';
+const LEVEL_TWO_GREEN_BUCKET_MASK = new Path2D('M 2 16 Q 2 2 17 2 H 188 Q 205 2 205 19 V 79 Q 205 99 185 99 H 113 Q 99 99 99 113 V 182 Q 99 201 82 201 H 17 Q 1 201 1 183 Z');
+const levelTwoRedBucketAtlasImage = new Image();
+levelTwoRedBucketAtlasImage.src = '/assets/level2/level2-red-bucket-atlas.png';
+const LEVEL_TWO_RED_BUCKET_MASK = new Path2D('M 2 16 Q 2 1 18 1 H 189 Q 205 1 205 17 V 188 Q 205 203 189 203 H 120 Q 103 203 103 188 V 128 Q 103 114 89 114 H 18 Q 2 114 2 98 Z');
 const levelTwoSourceGameplayVideo = document.createElement('video');
 levelTwoSourceGameplayVideo.id = 'level-two-source-gameplay-video';
 levelTwoSourceGameplayVideo.src = '/assets/level2/level2-gameplay-source.mp4';
@@ -1609,6 +1615,8 @@ function setLevelTwoGreenBucketHeight(bucket, height) {
   if (bucket.color !== 'green') return;
   const lift = Math.max(0, Math.min(1, (height - 198) / 40));
   bucket.height = height;
+  const upper = bucket.segments?.find((segment) => segment.y === 0);
+  if (upper) upper.height = Math.max(86, ((height + 4) * 99) / 206);
   const leg = bucket.segments?.find((segment) => segment.y > 0);
   if (leg) leg.height = 153 + (40 * lift);
 }
@@ -1729,6 +1737,49 @@ function drawBucket(bucket, lockedPreview = false) {
     ? bucket.segments
     : [{ x: 0, y: 0, width, height }];
   const composite = Boolean(bucket.segments?.length);
+  const levelTwoBucketAtlas = color === 'green' ? levelTwoGreenBucketAtlasImage : levelTwoRedBucketAtlasImage;
+  if (state.game.level === 2 && (color === 'green' || color === 'red') && !lockedPreview
+    && !state.levelTwoSourceTimeline
+    && levelTwoBucketAtlas.complete
+    && levelTwoBucketAtlas.naturalWidth > 0) {
+    const frame = Math.max(0, Math.min(100, Math.round(progress)));
+    const atlasHeight = color === 'green' ? 206 : 205;
+    const mask = color === 'green' ? LEVEL_TWO_GREEN_BUCKET_MASK : LEVEL_TWO_RED_BUCKET_MASK;
+    ctx.save();
+    // The interaction boundary is the lower edge of the pixel grid.
+    ctx.beginPath();
+    ctx.rect(0, LEVEL_TWO_DRAG_TOP[color], SCREEN.width, SCREEN.height - LEVEL_TWO_DRAG_TOP[color]);
+    ctx.clip();
+    ctx.translate(x - (color === 'green' ? 2 : 0), y - 2);
+    ctx.scale((width + 7) / 208, (height + 4) / atlasHeight);
+    if (state.dragging && state.game.activeBucketId === bucket.id) {
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = '#fff';
+      ctx.lineJoin = 'round';
+      ctx.stroke(mask);
+    }
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(levelTwoBucketAtlas, (frame % 10) * 208, Math.floor(frame / 10) * atlasHeight,
+      208, atlasHeight, 0, 0, 208, atlasHeight);
+    // The sampled source frames sometimes have falling cubes over their
+    // percentage. Keep the label tied to the player's actual collected count.
+    ctx.beginPath();
+    ctx.moveTo(132, 0);
+    ctx.lineTo(205, 0);
+    ctx.lineTo(205, 30);
+    ctx.lineTo(142, 30);
+    ctx.quadraticCurveTo(132, 30, 132, 20);
+    ctx.closePath();
+    ctx.fillStyle = color === 'green'
+      ? gradient(0, 0, 0, 30, [[0, '#4beb41'], [1, '#39d137']])
+      : gradient(0, 0, 0, 30, [[0, '#ff5951'], [1, '#e92f35']]);
+    ctx.fill();
+    drawText(`${progress}%`, 198, 25, {
+      size: 24, align: 'right', fill: '#fff', stroke: '#1a1b24', lineWidth: 5, shadow: '#10131b', shadowY: 1,
+    });
+    ctx.restore();
+    return;
+  }
   if (state.game.level === 2 && color === 'yellow' && !lockedPreview
     && !state.levelTwoSourceTimeline
     && levelTwoYellowBucketAtlasImage.complete
@@ -3502,6 +3553,7 @@ function advanceLevelTwoCollectionProgress(now) {
     if (!bucket.sourceCollectionActive || !Number.isFinite(bucket.sourceProgressStartedAt)) continue;
     const before = getProgress(state.game, bucket);
     const total = state.game.bucketTotals[bucket.id];
+    const displayedBefore = state.game.bucketDisplayedCollected[bucket.id];
     const elapsedMs = Math.max(0, now - bucket.sourceProgressStartedAt);
     if (state.levelTwoSourceTimeline && bucket.color === 'green' && state.game.activeBucketId !== bucket.id) {
       const sourcePosition = levelTwoRecordedBucketPosition('green', levelTwoSourceGameplayVideo.currentTime);
@@ -3536,13 +3588,20 @@ function advanceLevelTwoCollectionProgress(now) {
       remaining = Math.floor(bucket.freeCollectionCredit);
     }
     if (remaining > 0) {
-      const cells = fillBucket(state.game, bucket.id, remaining, acceptsCell);
+      const cells = fillBucket(state.game, bucket.id, remaining, acceptsCell, { bottomUp: !state.levelTwoSourceTimeline });
       if (!state.levelTwoSourceTimeline) bucket.freeCollectionCredit -= cells.length;
       state.moveCollected += cells.length;
       addCollectedEffects(cells, now, bucket, { createParticles: !state.levelTwoSourceTimeline });
     }
     const selected = state.game.bucketCollected[bucket.id];
-    state.game.bucketDisplayedCollected[bucket.id] = Math.max(state.game.bucketDisplayedCollected[bucket.id], selected);
+    const anchor = bucket.freeProgressAnchor;
+    const remainingAtTakeover = anchor ? total - anchor.collected : 0;
+    const displayCandidate = anchor && remainingAtTakeover > 0
+      ? anchor.displayed + ((selected - anchor.collected) / remainingAtTakeover) * (total - anchor.displayed)
+      : selected;
+    // fillBucket updates the logical cell count too. Keep the visible label
+    // continuous when a source frame and our cell model differ in density.
+    state.game.bucketDisplayedCollected[bucket.id] = Math.min(total, Math.max(displayedBefore, displayCandidate));
     const progress = getProgress(state.game, bucket);
     const milestone = LEVEL_TWO_COLLECTION_ANNOUNCEMENTS[bucket.color]?.find((value) => (
       before < value && progress >= value && value !== bucket.lastAnnouncedSourceProgress
@@ -4423,6 +4482,10 @@ function drawScene(now) {
     && Boolean(state.levelTwoSourceTimeline)
     && levelTwoGameplayBackgroundImage.complete
     && levelTwoGameplayBackgroundImage.naturalWidth > 0;
+  const showLevelTwoFreeBackground = state.game.level === 2
+    && state.levelTwoInteractive && !showLevelTwoLivePanel
+    && levelTwoGameplayBackgroundImage.complete && levelTwoGameplayBackgroundImage.naturalWidth > 0
+    && levelTwoOpeningPanelImage.complete && levelTwoOpeningPanelImage.naturalWidth > 0;
   const levelEightPanelVideo = getLevelEightPanelVideo();
   if (state.game.level === 2) {
     canvas.dataset.progressRed = String(getProgress(state.game, 'red'));
@@ -4496,8 +4559,17 @@ function drawScene(now) {
     && Boolean(state.levelFiveSourceTimeline)
     && levelFiveSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
     && !levelFiveSourceGameplayVideo.seeking;
-  if (!showLevelTwoLivePanel && !showLevelFourOpeningPanel && !showLevelFourSourceFrame
+  if (!showLevelTwoLivePanel && !showLevelTwoFreeBackground && !showLevelFourOpeningPanel && !showLevelFourSourceFrame
       && !showLevelFourSourcePanel && !showLevelFiveOpeningPanel && !showLevelFiveSourcePanel) drawGameFrame();
+  if (showLevelTwoFreeBackground) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelTwoGameplayBackgroundImage, 17, 310);
+    // The extracted gameplay background contains patched first-row tiles.
+    // Replace that row with the unobstructed tiles from the opening frame.
+    ctx.drawImage(levelTwoOpeningPanelImage, 32, 225, 508, 112, 49, 535, 508, 112);
+    ctx.restore();
+  }
   if (showLevelFourSourceFrame) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
@@ -4558,6 +4630,7 @@ function drawScene(now) {
         levelTwoSourceGameplayVideo.videoHeight,
       );
       ctx.restore();
+      cacheLevelTwoSourceWall();
     } else {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
@@ -4639,7 +4712,7 @@ function drawScene(now) {
     drawLevelElevenSourcePanelFrame(levelElevenPanelVideo);
   } else {
     drawPixelWall();
-    drawPad();
+    if (!showLevelTwoFreeBackground) drawPad();
     drawBuckets();
   }
   if (!showLevelThreeSourcePanel && showLevelThreeOpeningPanel) {
@@ -4737,8 +4810,55 @@ const LEVEL_TWO_DOCKS = {
   yellow: { x: 50, y: 520 },
 };
 
+const levelTwoTakeoverCanvas = document.createElement('canvas');
+levelTwoTakeoverCanvas.width = 478;
+levelTwoTakeoverCanvas.height = 176;
+const levelTwoTakeoverContext = levelTwoTakeoverCanvas.getContext('2d', { willReadFrequently: true });
+let levelTwoTakeoverFrameValid = false;
+let levelTwoTakeoverFrameTime = 0;
+
+function cacheLevelTwoSourceWall() {
+  const video = levelTwoSourceGameplayVideo;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  // Cache the frame actually drawn on screen, including during a later seek.
+  levelTwoTakeoverContext.drawImage(video, 43, 34, 478, 176, 0, 0, 478, 176);
+  levelTwoTakeoverFrameTime = video.currentTime;
+  levelTwoTakeoverFrameValid = true;
+}
+
+function syncLevelTwoRedWallBeforeTakeover() {
+  const red = getBucket(state.game, 'red');
+  if (!red?.sourceCollectionActive || !levelTwoTakeoverFrameValid) return;
+  const { data, width, height } = levelTwoTakeoverContext.getImageData(0, 0, 478, 176);
+  const openingGrid = createGameState(2).grid;
+  let remaining = 0;
+  for (let index = 0; index < openingGrid.length; index += 1) {
+    const cell = openingGrid[index];
+    if (cell?.targetBucketId !== 'red') continue;
+    const x = Math.round(cell.x - 60), y = Math.round(cell.y - 344);
+    if (x < 0 || x >= width || y < 0 || y >= height) continue;
+    const offset = (y * width + x) * 4;
+    const [r, g, b] = data.subarray(offset, offset + 3);
+    const visible = r > g * 1.35 && r > b * 1.25;
+    state.game.grid[index] = visible ? cell : null;
+    if (visible) remaining += 1;
+  }
+  const collected = state.game.bucketTotals.red - remaining;
+  const total = state.game.bucketTotals.red;
+  const sourceProgress = levelTwoSourceProgressAt('red', Math.max(0, (levelTwoTakeoverFrameTime - 0.2) * 1_000));
+  const displayed = remaining > 0 ? Math.min(total - 1, total * sourceProgress / 100) : total;
+  state.game.bucketCollected.red = collected;
+  state.game.bucketDisplayedCollected.red = displayed;
+  state.game.collected.red = collected;
+  red.freeProgressAnchor = { collected, displayed };
+}
+
 function leaveLevelTwoSourceSequence() {
   if (!state.levelTwoSourceTimeline) return;
+  // Preserve the visible source wall at the instant the player takes control.
+  // The source clears red in a diagonal pattern, while the generic fill order
+  // removes rows from the top; switching without this sync changes the picture.
+  syncLevelTwoRedWallBeforeTakeover();
   state.levelTwoSourceTimeline = null;
   state.levelTwoInteractive = true;
   levelTwoSourceGameplayVideo.pause();
@@ -4765,6 +4885,7 @@ function dockLevelTwoBucket(bucket, startedAt) {
     const firstBucketMove = state.game.moves === 0;
     state.game.moves += 1;
     if (firstBucketMove && bucket.color === 'red' && atSourceDock && !state.levelTwoInteractive) {
+      levelTwoTakeoverFrameValid = false;
       state.levelTwoSourceTimeline = { startedAt, pausedAt: null, seeking: false };
       audio.setSourceMixMode(true);
     } else if (firstBucketMove) {
@@ -4982,7 +5103,7 @@ function onPointerMove(event) {
       bucket.y = next.y;
       if (bucket.color === 'green') {
         const lift = Math.max(0, Math.min(1, (733 - bucket.y) / 240));
-        setLevelTwoGreenBucketHeight(bucket, 198 + (40 * lift));
+        setLevelTwoGreenBucketHeight(bucket, 198 + (20 * lift));
       }
       // In free play, begin receiving pixels as soon as the held tray reaches
       // the wall edge; waiting for pointerup makes a held drag appear frozen.

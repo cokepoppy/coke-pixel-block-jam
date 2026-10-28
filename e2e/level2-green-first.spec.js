@@ -1,4 +1,36 @@
 import { expect, test } from '@playwright/test';
+import { createGameState } from '../src/game.js';
+
+test('第二关先拖绿槽时像素从墙底开始落下，红墙保持原状', async ({ page }) => {
+  test.setTimeout(15_000);
+  await page.goto('/?previewLevel=2');
+  await expect(page.locator('#live-status')).toHaveText('第 2 关开始');
+  const canvas = page.locator('#game-canvas');
+  const bounds = await canvas.boundingBox();
+  const point = (x, y) => ({ x: bounds.x + x * bounds.width / 597, y: bounds.y + y * bounds.height / 1296 });
+  const grid = createGameState(2).grid.filter(Boolean);
+  const sample = () => canvas.evaluate((el, cells) => {
+    const context = el.getContext('2d');
+    return cells.map(({ x, y }) => Array.from(context.getImageData(Math.round(x), Math.round(y), 1, 1).data));
+  }, grid);
+  const initial = await sample();
+  const start = point(100, 750), end = point(100, 550);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 20 });
+  await expect.poll(() => canvas.getAttribute('data-progress-green'), { timeout: 5_000 }).not.toBe('0');
+  const progress = Number(await canvas.getAttribute('data-progress-green'));
+  expect(progress).toBeLessThan(50);
+  const during = await sample();
+  const isGreen = ([r, g, b]) => g > r * 1.1 && g > b * 1.1;
+  const isRed = ([r, g, b]) => r > g * 1.35 && r > b * 1.25;
+  const upperGreen = grid.map((cell, index) => ({ cell, index }))
+    .filter(({ cell }) => cell.color === 'green' && cell.row <= 5);
+  const redCells = grid.map((cell, index) => ({ cell, index })).filter(({ cell }) => cell.color === 'red');
+  expect(upperGreen.filter(({ index }) => isGreen(initial[index]) && !isGreen(during[index]))).toEqual([]);
+  expect(redCells.filter(({ index }) => isRed(initial[index]) !== isRed(during[index]))).toEqual([]);
+  await page.mouse.up();
+});
 
 test('第二关先拖绿槽到墙下即可收集，随后红黄槽仍可操作并通关', async ({ page }) => {
   test.setTimeout(45_000);
