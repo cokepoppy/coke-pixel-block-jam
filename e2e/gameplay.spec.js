@@ -2205,8 +2205,9 @@ test('真实触屏拖动绿色槽不闪烁黄槽、红槽不误移且还能继�
   const leftEdgePixel = await sharp(greenFinishedScreenshot)
     .extract({ left: 17, top: 426, width: 1, height: 1 })
     .removeAlpha().raw().toBuffer();
-  expect(leftEdgePixel[0], 'the recorded translucent volume strip must not appear on the game frame').toBeGreaterThan(100);
-  expect(leftEdgePixel[1]).toBeGreaterThan(170);
+  const cleanLeftEdgePixel = await sharp(fileURLToPath(new URL('../assets/level1/level1-opening-panel.png', import.meta.url)))
+    .extract({ left: 0, top: 200, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+  expect(leftEdgePixel, 'the recorded translucent volume strip must not appear on the game frame').toEqual(cleanLeftEdgePixel);
 
   const lowerTileSamples = await sharp(greenFinishedScreenshot)
     .extract({ left: 0, top: 1010, width: 597, height: 1 })

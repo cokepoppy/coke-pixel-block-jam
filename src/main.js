@@ -164,6 +164,12 @@ const levelOneSettingsGearImage = new Image();
 levelOneSettingsGearImage.src = '/assets/level1/level1-settings-gear.png';
 const levelOneOpeningPanelImage = new Image();
 levelOneOpeningPanelImage.src = '/assets/level1/level1-opening-panel.png';
+const levelOneGreenBucketAtlasImage = new Image();
+levelOneGreenBucketAtlasImage.src = '/assets/level1/level1-green-bucket-atlas.png';
+const levelOneLiveFrameCanvas = document.createElement('canvas');
+levelOneLiveFrameCanvas.width = 563;
+levelOneLiveFrameCanvas.height = 744;
+let levelOneLiveFrameReady = false;
 const levelOneTutorialVideo = document.createElement('video');
 levelOneTutorialVideo.id = 'level-one-tutorial-video';
 levelOneTutorialVideo.src = '/assets/level1/level1-tutorial-hand.mp4';
@@ -233,6 +239,7 @@ for (const eventName of ['pause', 'seeking', 'waiting', 'stalled']) {
 function initialPreviewAssetsReady() {
   if (initialLevel === 1) {
     if (!levelOneOpeningPanelImage.complete || levelOneOpeningPanelImage.naturalWidth === 0) return false;
+    if (!levelOneGreenBucketAtlasImage.complete) return false;
     return prefersReducedMotion.matches
       || (levelOneTutorialVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
         && levelOneTutorialFramesImage.complete
@@ -1072,6 +1079,28 @@ function drawGameFrame() {
     return;
   }
   drawFramePanel(config.frame, config.wall);
+  if (state.game.level === 1 && levelOneOpeningPanelImage.complete && levelOneOpeningPanelImage.naturalWidth > 0) {
+    // Keep the source frame around the interactive board without copying its
+    // recorded trays, tutorial hand, or the device's volume overlay.
+    if (!levelOneLiveFrameReady) {
+      const frameContext = levelOneLiveFrameCanvas.getContext('2d');
+      frameContext.drawImage(levelOneOpeningPanelImage, 0, 0, 563, 300, 0, 0, 563, 300);
+      frameContext.drawImage(levelOneOpeningPanelImage, 0, 300, 26, 444, 0, 300, 26, 444);
+      frameContext.drawImage(levelOneOpeningPanelImage, 537, 300, 26, 444, 537, 300, 26, 444);
+      const fade = frameContext.createLinearGradient(0, 732, 0, 744);
+      fade.addColorStop(0, 'rgba(0,0,0,1)');
+      fade.addColorStop(1, 'rgba(0,0,0,0)');
+      frameContext.globalCompositeOperation = 'destination-in';
+      frameContext.fillStyle = fade;
+      frameContext.fillRect(0, 0, 563, 744);
+      frameContext.globalCompositeOperation = 'source-over';
+      levelOneLiveFrameReady = true;
+    }
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelOneLiveFrameCanvas, 17, 226);
+    ctx.restore();
+  }
 }
 
 function pixelTheme(color) {
@@ -1733,6 +1762,8 @@ function drawBucket(bucket, lockedPreview = false) {
       ? LEVEL_FOUR_BUCKET_THEMES[color] ?? COLORS_3D[color]
     : COLORS_3D[color];
   const progress = getProgress(state.game, bucket);
+  const useLevelOneGreenAtlas = state.game.level === 1 && color === 'green' && !lockedPreview
+    && levelOneGreenBucketAtlasImage.complete && levelOneGreenBucketAtlasImage.naturalWidth > 0;
   const segments = bucket.segments?.length
     ? bucket.segments
     : [{ x: 0, y: 0, width, height }];
@@ -1914,6 +1945,7 @@ function drawBucket(bucket, lockedPreview = false) {
       const { cavity } = slot;
       const count = Math.min(slot.capacity, remaining);
       remaining -= count;
+      if (useLevelOneGreenAtlas) continue;
       if (state.game.level === 1 && color === 'yellow' && progress === 100 && !lockedPreview
         && levelOneYellowPileImage.complete && levelOneYellowPileImage.naturalWidth > 0) {
         ctx.save();
@@ -2035,6 +2067,19 @@ function drawBucket(bucket, lockedPreview = false) {
       size: label.size ?? Math.max(16, Math.min(27, Math.min(width, height) * 0.36)),
       align: label.align, fill: '#fff', stroke: '#1a1b24', lineWidth: 6, shadow: '#10131b', shadowY: 1,
     });
+  }
+  if (useLevelOneGreenAtlas) {
+    const sprite = Math.max(0, Math.min(100, Math.round(progress)));
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(levelOneGreenBucketAtlasImage, (sprite % 10) * 125, Math.floor(sprite / 10) * 247,
+      125, 247, x, y, width, height);
+    // Occluding source particles sometimes cover the recorded number; paint
+    // the player's actual count over the sampled texture instead.
+    drawText(`${progress}%`, x + width - 4, y + 35, {
+      size: 27, align: 'right', fill: '#fff', stroke: '#1a1b24', lineWidth: 5, shadow: '#10131b', shadowY: 1,
+    });
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -3654,12 +3699,11 @@ function levelOneSourceSegment(color) {
 }
 
 function scheduleLevelOneSourceFrameDraw(timeline) {
-  if (typeof levelOneSourceVideo.requestVideoFrameCallback !== 'function'
-      || timeline.sourceFrameDrawPending
+  if (timeline.sourceFrameDrawPending
       || state.levelOneSourceTimeline !== timeline
       || timeline.completed) return;
   timeline.sourceFrameDrawPending = true;
-  levelOneSourceVideo.requestVideoFrameCallback((_now, metadata) => {
+  const onFrame = (_now, metadata = {}) => {
     timeline.sourceFrameDrawPending = false;
     if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
     const presentedAndPlayable = !levelOneSourceVideo.paused && !levelOneSourceVideo.seeking
@@ -3686,6 +3730,7 @@ function scheduleLevelOneSourceFrameDraw(timeline) {
           timeline.sourceFramePresented = true;
           timeline.mediaPauseStartedAt = null;
         }
+        timeline.lastPresentedAt = performance.now();
         drawLevelOneSourceFrameToCanvas();
         timeline.awaitingSourceFrame = false;
         if (typeof window.__levelOneSourceFrameObserver === 'function') {
@@ -3696,7 +3741,34 @@ function scheduleLevelOneSourceFrameDraw(timeline) {
         }
       }
     });
-  });
+  };
+  if (typeof levelOneSourceVideo.requestVideoFrameCallback === 'function') {
+    levelOneSourceVideo.requestVideoFrameCallback(onFrame);
+  } else {
+    // Some embedded browsers do not expose video-frame callbacks. Sample the
+    // playing video on the ordinary render clock instead of waiting forever.
+    requestAnimationFrame(now => onFrame(now, { mediaTime: levelOneSourceVideo.currentTime }));
+  }
+}
+
+function fallbackLevelOneSourceTimeline(timeline, now) {
+  if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
+  if (timeline.mediaPauseStartedAt !== null) {
+    timeline.sweep.startedAt += now - timeline.mediaPauseStartedAt;
+    timeline.mediaPauseStartedAt = null;
+  } else if (!timeline.sourceFramePresented) {
+    timeline.sweep.startedAt += now - timeline.watchdogStartedAt;
+  }
+  timeline.fallback = true;
+  timeline.completed = true;
+  timeline.videoPlayPending = false;
+  levelOneSourceVideo.pause();
+  levelOneSourceAudio.pause();
+  audio.setSourceMixMode(false);
+  if (state.levelOneWonPending) {
+    state.game.status = 'won';
+    state.levelOneWonPending = false;
+  }
 }
 
 function completeLevelOneSourceTimeline(timeline) {
@@ -3725,8 +3797,11 @@ function requestLevelOneSourceVideoPlayback(timeline) {
     timeline.videoPlayPending = false;
     if (state.levelOneSourceTimeline !== timeline || timeline.completed) return;
     scheduleLevelOneSourceFrameDraw(timeline);
-  }).catch(() => {
+  }).catch((error) => {
     timeline.videoPlayPending = false;
+    if (error?.name === 'NotAllowedError' || error?.name === 'NotSupportedError') {
+      fallbackLevelOneSourceTimeline(timeline, performance.now());
+    }
   });
 }
 
@@ -3756,6 +3831,12 @@ function startLevelOneSourceAnimation(color, sweep) {
     sourceFramePresented: false,
     awaitingSourceFrame: true,
     mediaPauseStartedAt: null,
+    watchdogStartedAt: performance.now(),
+    lastPresentedAt: null,
+    watchdogPausedAt: null,
+    useFullPanel: color === 'yellow' && state.game.buckets.every((candidate) => (
+      candidate.id === 'yellow' || (!candidate.sweep && state.game.bucketCollected[candidate.id] === 0)
+    )),
   };
   state.levelOneSourceTimeline = timeline;
   levelOneSourceVideo.pause();
@@ -3791,10 +3872,23 @@ function updateLevelOneSourcePlayback() {
   if (!timeline) return;
   const shouldPause = state.game.status === 'paused' || document.hidden;
   if (shouldPause) {
+    timeline.watchdogPausedAt ??= performance.now();
     if (!levelOneSourceVideo.paused || !levelOneSourceAudio.paused) {
       levelOneSourceVideo.pause();
       levelOneSourceAudio.pause();
     }
+    return;
+  }
+  const now = performance.now();
+  if (timeline.watchdogPausedAt !== null) {
+    const pausedDuration = now - timeline.watchdogPausedAt;
+    timeline.watchdogStartedAt += pausedDuration;
+    if (timeline.lastPresentedAt !== null) timeline.lastPresentedAt += pausedDuration;
+    timeline.watchdogPausedAt = null;
+  }
+  if (!timeline.completed && now - (timeline.lastPresentedAt ?? timeline.watchdogStartedAt) > 1_000) {
+    // A denied/stalled video must never freeze game rules or block another tray.
+    fallbackLevelOneSourceTimeline(timeline, now);
     return;
   }
   const mediaClockNow = timeline.mediaPauseStartedAt ?? performance.now();
@@ -3983,10 +4077,13 @@ function advanceLevelOneSweep(now) {
       const colorName = bucket.color === 'yellow' ? '黄色' : bucket.color === 'green' ? '绿色' : '红色';
       liveStatus.textContent = `已收集 ${state.game.bucketCollected[bucket.id]} 个${colorName} 像素块，进度 ${reportedProgress}%`;
     }
-    if (progress >= 100) {
+    if (state.game.bucketCollected[bucket.id] >= state.game.bucketTotals[bucket.id]) {
       sweep.completed = true;
       bucket.completeAt = now;
-      if (state.game.grid.every((cell) => cell === null)) {
+      if (state.game.grid.every((cell) => cell === null)
+          && state.game.buckets.every((candidate) => (
+            state.game.bucketCollected[candidate.id] >= state.game.bucketTotals[candidate.id]
+          ))) {
         if (state.levelOneSourceTimeline?.color === 'red' && !state.levelOneSourceTimeline.completed) {
           state.levelOneWonPending = true;
         } else {
@@ -4317,7 +4414,7 @@ function drawLevelOneSourceBoardFrame(activeColor = state.levelOneSourceTimeline
 function drawLevelOneSourceFrameToCanvas() {
   const timeline = state.levelOneSourceTimeline;
   if (!timeline || levelOneSourceVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
-  if (timeline.color === 'yellow') {
+  if (timeline.color === 'yellow' && timeline.useFullPanel) {
     drawLevelOneBucketsUnderSourcePanel(LEVEL_ONE_ACTION_BLEND_START);
     drawLevelOneSourceActionPanel();
   } else if (!(timeline.color === 'red' && levelOneSourceVideo.currentTime >= 5.5)) {
@@ -4476,6 +4573,9 @@ function drawScene(now) {
     if (canvas.dataset.levelOneRemainingCells !== remainingCells) canvas.dataset.levelOneRemainingCells = remainingCells;
     if (canvas.dataset.levelOneWinPending !== winPending) canvas.dataset.levelOneWinPending = winPending;
     if (canvas.dataset.levelOneSourceComplete !== sourceComplete) canvas.dataset.levelOneSourceComplete = sourceComplete;
+    canvas.dataset.levelOneBuckets = JSON.stringify(state.game.buckets.map(({ id, x, y, visible }) => ({
+      id, x, y, visible, collected: state.game.bucketCollected[id], total: state.game.bucketTotals[id],
+    })));
   }
   advanceUfoFlight(now);
   const showLevelTwoLivePanel = state.game.level === 2
@@ -4605,10 +4705,13 @@ function drawScene(now) {
     && !state.levelOneSourceTimeline.completed;
   const showLevelOneCompletedSourceFrame = state.game.level === 1
     && Boolean(state.levelOneSourceTimeline?.completed)
+    && !state.levelOneSourceTimeline?.fallback
     && levelOneSourcePresentedFrameTime !== null;
   const showLevelOneBrandPrelude = showSourceActionPanel
     && state.levelOneSourceTimeline.color === 'red'
     && levelOneSourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    && state.game.buckets.every((bucket) => bucket.id === 'red'
+      || state.game.bucketCollected[bucket.id] >= state.game.bucketTotals[bucket.id])
     && levelOneSourceVideo.currentTime >= 5.5;
   if (showLevelTwoLivePanel) {
     if (levelTwoSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -4643,7 +4746,7 @@ function drawScene(now) {
   } else if (showLevelOneBrandPrelude) {
     drawLevelOneLocalizedBrandMark(levelOneSourceVideo.currentTime);
   } else if (showSourceActionPanel) {
-    if (state.levelOneSourceTimeline.color === 'yellow') {
+    if (state.levelOneSourceTimeline.color === 'yellow' && state.levelOneSourceTimeline.useFullPanel) {
       drawLevelOneBucketsUnderSourcePanel(LEVEL_ONE_ACTION_BLEND_START);
       drawLevelOneSourceActionPanel();
     } else {
@@ -4656,7 +4759,7 @@ function drawScene(now) {
       drawLevelOneSourceBoardFrame();
     }
   } else if (showLevelOneCompletedSourceFrame) {
-    if (state.levelOneSourceTimeline.color === 'yellow') {
+    if (state.levelOneSourceTimeline.color === 'yellow' && state.levelOneSourceTimeline.useFullPanel) {
       // The yellow action clip ends on a full tray. Hold that exact source
       // panel until the player starts the next color; otherwise the live
       // bucket exit animation changes the frame while the source clock is
@@ -4942,6 +5045,12 @@ function onPointerDown(event) {
   }
   const bucket = getBucketAt(state.game, point.x, point.y);
   if (!bucket) return;
+  if (state.game.level === 1 && state.levelOneSourceTimeline?.color === 'yellow'
+      && bucket.color !== 'yellow') {
+    // A player can grab another tray even while the recorded yellow segment
+    // is running or held at its final frame.
+    state.levelOneSourceTimeline.useFullPanel = false;
+  }
   if (state.game.level === 2 && state.levelTwoSourceTimeline && bucket.color !== 'red') {
     // The recorded panel contains its own later tray movements. Once another
     // tray is touched, expose the live tray immediately so the player's drag
@@ -5096,7 +5205,9 @@ function onPointerMove(event) {
     if (state.game.level === 1) {
       const wallBottom = state.game.gridRect.y + state.game.gridRect.height;
       bucket.x = next.x;
-      bucket.y = bucket.sweep ? Math.max(next.y, wallBottom + 9) : next.y;
+      // Apply the boundary on the first pointer move as well; a fast swipe
+      // may jump directly from the starting slot to above the entire wall.
+      bucket.y = Math.max(next.y, wallBottom + 9);
       if (!bucket.sweep && bucket.y <= wallBottom + 64) startLevelOneSweep(bucket, performance.now());
     } else if (state.game.level === 2) {
       bucket.x = next.x;

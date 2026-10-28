@@ -50,3 +50,4 @@
 网页运行时不加载商店截图、游戏 APK 资源或未经授权的原作文件。后续生成/引入的素材需补记工具、日期、提示词/来源、处理、尺寸或时长、许可状态及采用/拒绝原因。
 
 | Level 2 自由操作绿/红槽图集 | `scripts/extract-level2-green-bucket-atlas.mjs` 和 `scripts/extract-level2-red-bucket-atlas.mjs` 从用户录屏衍生的 `assets/level2/level2-gameplay-source.mp4` 提取进度帧，并用 L 形透明蒙版处理 | 录屏衍生素材而非游戏原始资源；绿色 0% 上沿取开局帧修补，百分比按网页当前状态重绘。粒子与自由操作物理仍未逐帧对齐 |
+| Level 1 绿槽自由操作图集 | `scripts/extract-level1-green-bucket-atlas.mjs` 从用户录屏衍生的 `assets/level1/level1-source-animation.mp4` 采集 101 个进度图，裁切槽体并透明蒙版；绿槽开局上沿来自 `level1-opening-panel.png` | 视频衍生素材，不是游戏包原始资源。源片早期被手机音量 HUD 遮挡的左上约 42×100 区域使用干净开局和末帧插值、边缘渐隐；去除源百分比并按真实收集进度重绘。遮挡部分、补块、文字与动态粒子仍是近似；满格槽体的源/网页对照见证据账本 |
