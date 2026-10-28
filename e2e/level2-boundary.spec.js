@@ -76,12 +76,12 @@ test('第二关槽位停在像素墙下沿，并可通过实际拖动收集和�
   await drag([199, 570], [399, 570]);
   await expect(page.locator('#live-status')).toHaveText('第 3 关开始', { timeout: 12_000 });
   const samples = await page.evaluate(() => window.__levelTwoBoundarySamples);
-  const limits = { green: 493, red: 520, yellow: 520 };
+  const limits = { green: 520, red: 520, yellow: 520 };
   const pixelGridBottom = createGameState(2).gridRect.y + createGameState(2).gridRect.height;
   const minima = Object.fromEntries(Object.keys(limits).map(id => [id, Math.min(...samples.flat().filter(b => b.id === id).map(b => b.y))]));
   expect(pixelGridBottom).toBe(520);
   expect(minima, 'a real drag to the screen top must stop at the source-measured tray limits').toEqual(limits);
-  expect(pixelGridBottom - minima.green, 'the source green tray reaches only the bottom 27 px of the pixel grid').toBe(27);
+  expect(pixelGridBottom - minima.green, 'interactive trays must remain below the pixel grid').toBe(0);
   expect(errors).toEqual([]);
   await page.close();
   await copyFile(await video.path(), new URL('level2-boundary.webm', directory));

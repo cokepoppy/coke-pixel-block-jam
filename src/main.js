@@ -3525,7 +3525,7 @@ function advanceLevelTwoCollectionProgress(now) {
       // boundary; the unobserved rate is an approximation of the source.
       const delta = Math.min(50, Math.max(0, now - (bucket.freeCollectionAt ?? now)));
       bucket.freeCollectionAt = now;
-      const atWallEdge = bucket.y <= LEVEL_TWO_DRAG_TOP[bucket.color] + 14;
+      const atWallEdge = bucket.y <= LEVEL_TWO_DOCK_ZONE_BOTTOM;
       acceptsCell = (cell) => cell.x >= bucket.x - 5 && cell.x <= bucket.x + bucket.width + 5;
       const hasPixelsAbove = atWallEdge && state.game.grid.some((cell) => cell
         && cell.targetBucketId === bucket.id && acceptsCell(cell));
@@ -4725,9 +4725,11 @@ const LEVEL_FOUR_DRAG_TOP = {
   'blue-right': 637,
 };
 
-// Green's raised rim briefly reaches y=493 in the supplied source at 12.2 s;
-// the other trays stay at the wall's lower edge, around y=520–533.
-const LEVEL_TWO_DRAG_TOP = { green: 493, red: 520, yellow: 520 };
+// Keep interactive trays below the pixel grid. Collection starts when the
+// opening reaches the gap immediately below the grid, without requiring the
+// player to drag the pointer into the wall.
+const LEVEL_TWO_DRAG_TOP = { green: 520, red: 520, yellow: 520 };
+const LEVEL_TWO_DOCK_ZONE_BOTTOM = 555;
 
 const LEVEL_TWO_DOCKS = {
   green: { x: 50, y: 493 },
@@ -4757,7 +4759,7 @@ function dockLevelTwoBucket(bucket, startedAt) {
   const atYellowRepositionDock = bucket.color === 'yellow'
     && bucket.sourceCollectionActive
     && Math.hypot(bucket.x - 250, bucket.y - 530) <= 30;
-  const atWallEdge = bucket.y <= LEVEL_TWO_DRAG_TOP[bucket.color] + 14;
+  const atWallEdge = bucket.y <= LEVEL_TWO_DOCK_ZONE_BOTTOM;
   const hasPixelsAbove = state.game.grid.some((cell) => cell && cell.targetBucketId === bucket.id
     && cell.x >= bucket.x - 5 && cell.x <= bucket.x + bucket.width + 5);
   const atPlayableDock = atWallEdge && hasPixelsAbove;
