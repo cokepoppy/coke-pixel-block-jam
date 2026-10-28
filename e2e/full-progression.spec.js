@@ -209,6 +209,20 @@ async function playClearRoute(page, level, actions) {
     }))).toBe(100);
     await expect(page.locator('#live-status')).toHaveText('第 5 关开始', { timeout: 30_000 });
     return;
+  } else if (level === 5) {
+    const start = browserPoint({ x: 446, y: 681 });
+    const target = browserPoint({ x: 359, y: 673 });
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 24 });
+    await page.mouse.up();
+    await expect(page.locator('#game-canvas')).toHaveAttribute('data-level-five-source-active', 'true');
+    await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-five-source-time')))
+      .toBeGreaterThan(0.5);
+    await expect.poll(async () => Number(await page.locator('#game-canvas').getAttribute('data-level-five-remaining-cells')))
+      .toBeLessThan(555);
+    await expect(page.locator('#live-status')).toHaveText('第 6 关开始', { timeout: 25_000 });
+    return;
   } else if (level === 8) {
     const dragSourceAction = async (from, to) => {
       const start = browserPoint(from);
@@ -303,7 +317,7 @@ test('真实拖动连续清空 Level 1–13 并进入通关转场', async ({ pag
   await page.goto('/?previewLevel=1');
 
   for (let level = 1; level <= 13; level += 1) {
-    const actions = [2, 4].includes(level) ? [] : planFullClear(level);
+    const actions = [2, 4, 5].includes(level) ? [] : planFullClear(level);
     await playClearRoute(page, level, actions);
   }
 

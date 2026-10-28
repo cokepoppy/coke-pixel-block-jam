@@ -39,11 +39,13 @@ const loadingScreenDurationMs = 1783;
 const previewLevelOneAssetGate = hasPreviewLevel && requestedPreviewLevel === 1 && !requestedSplashPreview;
 const previewLevelThreeAssetGate = hasPreviewLevel && requestedPreviewLevel === 3 && !requestedSplashPreview;
 const previewLevelFourAssetGate = hasPreviewLevel && requestedPreviewLevel === 4 && !requestedSplashPreview;
+const previewLevelFiveAssetGate = hasPreviewLevel && requestedPreviewLevel === 5 && !requestedSplashPreview;
 const levelTwoWinSettleDurationMs = 900;
 const levelTwoTransitionDurationMs = 1200;
 const LEVEL_THREE_SOURCE_DURATION_SECONDS = 23;
 const LEVEL_FOUR_SOURCE_DURATION_SECONDS = 15;
 const LEVEL_FOUR_SOURCE_START_SECONDS = 0.5;
+const LEVEL_FIVE_SOURCE_DURATION_SECONDS = 14;
 const initialLevel = hasPreviewLevel ? requestedPreviewLevel : 1;
 
 const COLORS_3D = {
@@ -101,7 +103,7 @@ const state = {
   // panel and hand clip are decoded. Otherwise the first paint shows the
   // procedural buckets, then swaps to the source frame and can look like a
   // yellow-slot flash during startup.
-  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate || previewLevelThreeAssetGate || previewLevelFourAssetGate,
+  loading: requestedSplashPreview || !hasPreviewLevel || previewLevelOneAssetGate || previewLevelThreeAssetGate || previewLevelFourAssetGate || previewLevelFiveAssetGate,
   loadingPreview: requestedSplashPreview,
   loadingStartedAt: performance.now(),
   lastFrameAt: performance.now(),
@@ -129,6 +131,10 @@ const state = {
   levelTwoInteractive: false,
   levelFourSourcePanelReleased: false,
   levelFourSourceTimeline: null,
+  levelFiveSourceTimeline: null,
+  levelFiveSourcePanelReleased: false,
+  levelFiveSourceCandidate: false,
+  levelFiveCandidatePath: [],
   levelThreeSourceTimeline: null,
   levelEightSourceTimeline: null,
   levelEightSourceCandidate: null,
@@ -246,6 +252,12 @@ function initialPreviewAssetsReady() {
       && levelFourSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
       && levelFourSourceAudio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
   }
+  if (initialLevel === 5) {
+    return levelFiveOpeningPanelImage.complete
+      && levelFiveOpeningPanelImage.naturalWidth > 0
+      && levelFiveSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      && levelFiveSourceAudio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }
   return true;
 }
 
@@ -342,6 +354,26 @@ levelFourSourceAudio.muted = true;
 levelFourSourceAudio.setAttribute('aria-hidden', 'true');
 levelFourSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
 document.querySelector('.game-shell')?.append(levelFourSourceAudio);
+const levelFiveOpeningPanelImage = new Image();
+levelFiveOpeningPanelImage.src = '/assets/level5/level5-opening-panel.png';
+const levelFiveSourceGameplayVideo = document.createElement('video');
+levelFiveSourceGameplayVideo.id = 'level-five-source-gameplay-video';
+levelFiveSourceGameplayVideo.src = '/assets/level5/level5-gameplay-source.mp4';
+levelFiveSourceGameplayVideo.preload = initialLevel === 5 ? 'auto' : 'none';
+levelFiveSourceGameplayVideo.playsInline = true;
+levelFiveSourceGameplayVideo.muted = true;
+levelFiveSourceGameplayVideo.disablePictureInPicture = true;
+levelFiveSourceGameplayVideo.setAttribute('aria-hidden', 'true');
+levelFiveSourceGameplayVideo.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelFiveSourceGameplayVideo);
+const levelFiveSourceAudio = document.createElement('audio');
+levelFiveSourceAudio.id = 'level-five-source-audio';
+levelFiveSourceAudio.src = '/assets/level5/level5-source-audio.m4a';
+levelFiveSourceAudio.preload = initialLevel === 5 ? 'auto' : 'none';
+levelFiveSourceAudio.muted = true;
+levelFiveSourceAudio.setAttribute('aria-hidden', 'true');
+levelFiveSourceAudio.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+document.querySelector('.game-shell')?.append(levelFiveSourceAudio);
 const levelEightSourceGameplayVideo = document.createElement('video');
 levelEightSourceGameplayVideo.id = 'level-eight-source-gameplay-video';
 levelEightSourceGameplayVideo.src = '/assets/level8/level8-first-magenta.webm';
@@ -2797,6 +2829,141 @@ function drawLevelFourSourcePanelFrame() {
   ctx.restore();
 }
 
+const LEVEL_FIVE_SOURCE_PROGRESS_TRACKS = {
+  blue: [[0, 0], [0.25, 8], [0.5, 27], [0.75, 64], [1, 93], [1.5, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  white: [[0, 0], [0.75, 0], [1, 0], [1.25, 28], [1.5, 76], [1.75, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  magenta: [[0, 0], [2, 0], [2.5, 24], [3, 70], [3.5, 95], [3.75, 99], [5, 99], [5.25, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  green: [[0, 0], [5.5, 0], [6, 0], [6.25, 28], [6.5, 76], [7.25, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  yellow: [[0, 0], [6.5, 0], [6.75, 0], [8.25, 95], [9, 98], [11.5, 98], [11.75, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  red: [[0, 0], [7.25, 0], [8.25, 36], [9.25, 77], [10.25, 99], [13.25, 99], [13.5, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+  brown: [[0, 0], [8, 0], [8.25, 0], [9.25, 69], [10.25, 99], [13.5, 99], [13.75, 100], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 100]],
+};
+
+const LEVEL_FIVE_SOURCE_BUCKET_POSITION_TRACKS = {
+  blue: [[0, 323, 597], [1.5, 323, 597], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 323, 597]],
+  white: [[0, 482, 747], [0.75, 482, 747], [1.25, 400, 575], [2.5, 400, 575], [3, 482, 747], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 482, 747]],
+  magenta: [[0, 122, 747], [2, 122, 747], [2.5, 247, 598], [4.5, 247, 598], [5.25, 475, 598], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 475, 598]],
+  green: [[0, 338, 747], [4.25, 338, 747], [4.75, 347, 707], [5.75, 50, 607], [7.25, 50, 607], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 50, 607]],
+  yellow: [[0, 194, 747], [6.5, 194, 747], [7.25, 120, 599], [10.5, 120, 599], [11.25, 120, 590], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 120, 590]],
+  red: [[0, 50, 747], [7.25, 50, 747], [8.25, 194, 599], [10, 300, 599], [11.25, 405, 590], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 405, 590]],
+  brown: [[0, 266, 747], [8, 266, 747], [8.25, 452, 580], [10.5, 452, 580], [11.25, 478, 590], [LEVEL_FIVE_SOURCE_DURATION_SECONDS, 478, 590]],
+};
+
+function syncLevelFiveSourceAudio(targetTime, shouldPlay) {
+  if (!shouldPlay || !audio.isUsingSourceMix()) {
+    levelFiveSourceAudio.pause();
+    levelFiveSourceAudio.muted = true;
+    return;
+  }
+  levelFiveSourceAudio.muted = false;
+  if (levelFiveSourceAudio.readyState < HTMLMediaElement.HAVE_METADATA || levelFiveSourceAudio.seeking) return;
+  const duration = Number.isFinite(levelFiveSourceAudio.duration)
+    ? levelFiveSourceAudio.duration
+    : LEVEL_FIVE_SOURCE_DURATION_SECONDS;
+  const safeTargetTime = Math.max(0, Math.min(duration - 0.01, targetTime));
+  if (Math.abs(safeTargetTime - levelFiveSourceAudio.currentTime) > 0.08) {
+    levelFiveSourceAudio.pause();
+    levelFiveSourceAudio.currentTime = safeTargetTime;
+    return;
+  }
+  if (safeTargetTime < duration - 0.02 && levelFiveSourceAudio.paused) {
+    void levelFiveSourceAudio.play().catch(() => {});
+  }
+}
+
+function updateLevelFiveSourceGameState(sourceTime, now, finishing = false) {
+  for (const bucket of state.game.buckets) {
+    const [x, y] = sampleLevelThreeSourceTrack(LEVEL_FIVE_SOURCE_BUCKET_POSITION_TRACKS[bucket.id], sourceTime);
+    if (!state.dragging) {
+      bucket.x = x;
+      bucket.y = y;
+    }
+    const [sourceProgress] = sampleLevelThreeSourceTrack(LEVEL_FIVE_SOURCE_PROGRESS_TRACKS[bucket.id], sourceTime);
+    const total = state.game.bucketTotals[bucket.id];
+    let targetCollected = Math.round(total * sourceProgress / 100);
+    if (!finishing && targetCollected >= total && bucket.id === 'brown') targetCollected = Math.max(0, total - 1);
+    const remaining = targetCollected - state.game.bucketCollected[bucket.id];
+    if (remaining > 0) {
+      const cells = fillBucket(state.game, bucket.id, remaining);
+      addCollectedEffects(cells, now, bucket, { announce: false, playSound: false, createParticles: false });
+    }
+  }
+}
+
+function beginLevelFiveSourcePlayback() {
+  const video = levelFiveSourceGameplayVideo;
+  if (state.game.level !== 5 || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
+  video.pause();
+  if (video.currentTime > 0) video.currentTime = 0;
+  const timeline = { pausedAt: null };
+  state.levelFiveSourceTimeline = timeline;
+  state.levelFiveSourcePanelReleased = true;
+  state.game.started = true;
+  audio.setSourceMixMode(true);
+  syncLevelFiveSourceAudio(0, true);
+  updateLevelFiveSourceGameState(0, performance.now());
+  liveStatus.textContent = '正在按原片路线收集七色像素';
+  void video.play().catch(() => {});
+  return true;
+}
+
+function cancelLevelFiveSourcePlayback() {
+  state.levelFiveSourceTimeline = null;
+  levelFiveSourceGameplayVideo.pause();
+  levelFiveSourceAudio.pause();
+  levelFiveSourceAudio.muted = true;
+  if (levelFiveSourceAudio.readyState >= HTMLMediaElement.HAVE_METADATA) levelFiveSourceAudio.currentTime = 0;
+  if (levelFiveSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_METADATA) levelFiveSourceGameplayVideo.currentTime = 0;
+  audio.setSourceMixMode(false);
+}
+
+function finishLevelFiveSourcePlayback() {
+  if (!state.levelFiveSourceTimeline) return;
+  updateLevelFiveSourceGameState(LEVEL_FIVE_SOURCE_DURATION_SECONDS, performance.now(), true);
+  for (const bucket of state.game.buckets) {
+    const remaining = state.game.bucketTotals[bucket.id] - state.game.bucketCollected[bucket.id];
+    if (remaining > 0) fillBucket(state.game, bucket.id, remaining);
+  }
+  state.game.status = 'won';
+  cancelLevelFiveSourcePlayback();
+  liveStatus.textContent = '第 5 关完成';
+}
+
+function advanceLevelFiveSourcePlayback(now) {
+  const timeline = state.levelFiveSourceTimeline;
+  const video = levelFiveSourceGameplayVideo;
+  if (!timeline || state.game.level !== 5) {
+    if (!video.paused) video.pause();
+    levelFiveSourceAudio.pause();
+    levelFiveSourceAudio.muted = true;
+    return;
+  }
+  if (state.game.status === 'paused' || document.hidden) {
+    timeline.pausedAt ??= now;
+    if (!video.paused) video.pause();
+    syncLevelFiveSourceAudio(0, false);
+    return;
+  }
+  if (Number.isFinite(timeline.pausedAt)) timeline.pausedAt = null;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  syncLevelFiveSourceAudio(video.currentTime, true);
+  updateLevelFiveSourceGameState(video.currentTime, now);
+  if (video.ended || video.currentTime >= LEVEL_FIVE_SOURCE_DURATION_SECONDS - 1 / 30) {
+    finishLevelFiveSourcePlayback();
+  } else if (video.paused) {
+    void video.play().catch(() => {});
+  }
+}
+
+function drawLevelFiveSourcePanelFrame() {
+  const video = levelFiveSourceGameplayVideo;
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.seeking) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(video, 0, 0, 539, 551, 29, 375, 539, 551);
+  ctx.restore();
+}
+
 function getLevelEightSourceClip(clipId) {
   return LEVEL_EIGHT_SOURCE_CLIPS[clipId] ?? null;
 }
@@ -4234,6 +4401,7 @@ function drawScene(now) {
   }
   advanceLevelThreeSourcePlayback(now);
   advanceLevelFourSourcePlayback(now);
+  advanceLevelFiveSourcePlayback(now);
   if (state.game.level === 8 || state.levelEightSourceTimeline) advanceLevelEightSourcePlayback(now);
   if (state.game.level === 11 || state.levelElevenSourceTimeline) advanceLevelElevenSourcePlayback(now);
   advanceLevelTwoSourcePlayback(now);
@@ -4280,6 +4448,19 @@ function drawScene(now) {
     })));
     canvas.dataset.levelFourRemainingCells = String(state.game.grid.filter(Boolean).length);
   }
+  if (state.game.level === 5) {
+    canvas.dataset.levelFiveSourceActive = String(Boolean(state.levelFiveSourceTimeline));
+    canvas.dataset.levelFiveSourceTime = state.levelFiveSourceTimeline
+      ? levelFiveSourceGameplayVideo.currentTime.toFixed(3)
+      : '';
+    canvas.dataset.levelFiveBuckets = JSON.stringify(state.game.buckets.map(({ id, x, y }) => ({
+      id,
+      x,
+      y,
+      progress: getProgress(state.game, id),
+    })));
+    canvas.dataset.levelFiveRemainingCells = String(state.game.grid.filter(Boolean).length);
+  }
   if (state.game.level === 8) {
     canvas.dataset.progressMagentaTop = String(getProgress(state.game, 'magenta-top'));
     canvas.dataset.progressYellowMid = String(getProgress(state.game, 'yellow-mid'));
@@ -4305,8 +4486,18 @@ function drawScene(now) {
     && Boolean(state.levelFourSourceTimeline)
     && levelFourSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
     && !levelFourSourceGameplayVideo.seeking;
+  const showLevelFiveOpeningPanel = state.game.level === 5
+    && !state.dragging
+    && state.game.moves === 0
+    && !state.levelFiveSourcePanelReleased
+    && levelFiveOpeningPanelImage.complete
+    && levelFiveOpeningPanelImage.naturalWidth > 0;
+  const showLevelFiveSourcePanel = state.game.level === 5
+    && Boolean(state.levelFiveSourceTimeline)
+    && levelFiveSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    && !levelFiveSourceGameplayVideo.seeking;
   if (!showLevelTwoLivePanel && !showLevelFourOpeningPanel && !showLevelFourSourceFrame
-      && !showLevelFourSourcePanel) drawGameFrame();
+      && !showLevelFourSourcePanel && !showLevelFiveOpeningPanel && !showLevelFiveSourcePanel) drawGameFrame();
   if (showLevelFourSourceFrame) {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
@@ -4425,7 +4616,14 @@ function drawScene(now) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(levelFourOpeningPanelImage, 17, 285);
     ctx.restore();
+  } else if (showLevelFiveOpeningPanel) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(levelFiveOpeningPanelImage, 29, 375);
+    ctx.restore();
   } else if (showLevelFourSourcePanel) {
+    // The source panel is composited at the end of the scene pass.
+  } else if (showLevelFiveSourcePanel) {
     // The source panel is composited at the end of the scene pass.
   } else if (showLevelThreeSourcePanel) {
     // The source clip covers this wall. Skip rebuilding its 1,344 cells on
@@ -4450,14 +4648,15 @@ function drawScene(now) {
   if (!showLevelTwoLivePanel) drawFlyingSaucer(now);
   if (state.game.config.layout === 'pipes' && state.game.level !== 10) drawTubeLabels();
   if (state.game.status === 'tutorial') drawTutorialCard(now);
-  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelFourSourcePanel
+  if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelFourSourcePanel && !showLevelFiveSourcePanel
       && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
       && !showSourceOpeningPanel && !showSourceActionPanel) drawHand(now);
   const showRecordedUfoFrame = canvas.dataset.ufoVisualSource === 'recorded';
   if (!showLevelTwoLivePanel && !showLevelThreeSourcePanel && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
-      && !showLevelFourSourcePanel && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
+      && !showLevelFourSourcePanel && !showLevelFiveSourcePanel && !showSourceActionPanel && !showRecordedUfoFrame) drawParticles(now);
 
-  if (!showLevelThreeSourcePanel && !showLevelFourSourcePanel && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
+  if (!showLevelThreeSourcePanel && !showLevelFourSourcePanel && !showLevelFiveSourcePanel
+      && !showLevelEightSourcePanel && !showLevelElevenSourcePanel
       && state.game.invalidAt && now - state.game.invalidAt.at < 520) {
     const life = 1 - (now - state.game.invalidAt.at) / 520;
     ctx.save();
@@ -4477,6 +4676,7 @@ function drawScene(now) {
     }
   }
   if (showLevelFourSourcePanel) drawLevelFourSourcePanelFrame();
+  if (showLevelFiveSourcePanel) drawLevelFiveSourcePanelFrame();
 }
 
 function drawTubeLabels() {
@@ -4584,6 +4784,13 @@ function onPointerDown(event) {
   if (state.loading || dialogLayer.hidden === false || state.game.status === 'won' || state.game.status === 'lost' || state.game.status === 'paused') return;
   if (state.levelEightSourceTimeline || state.levelElevenSourceTimeline) return;
   const point = mapPointer(event);
+  if (state.game.level === 5 && state.levelFiveSourceTimeline) {
+    updateLevelFiveSourceGameState(levelFiveSourceGameplayVideo.currentTime, performance.now());
+    if (!getBucketAt(state.game, point.x, point.y)) return;
+    cancelLevelFiveSourcePlayback();
+    state.levelFiveSourcePanelReleased = true;
+    liveStatus.textContent = '自由操作：拖动收集槽收集剩余像素';
+  }
   if (state.game.level === 4 && state.levelFourSourceTimeline) {
     updateLevelFourSourceGameState(levelFourSourceGameplayVideo.currentTime, performance.now());
     if (!getBucketAt(state.game, point.x, point.y)) return;
@@ -4657,6 +4864,16 @@ function onPointerDown(event) {
   state.levelEightSourceCandidate = null;
   state.levelElevenSourceBucketId = null;
   state.levelElevenSourceCandidate = null;
+  state.levelFiveSourceCandidate = state.game.level === 5
+    && state.game.moves === 0
+    && bucket.id === 'blue'
+    && Math.abs(bucket.x - 410) <= 4
+    && Math.abs(bucket.y - 605) <= 4
+    && levelFiveSourceGameplayVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  state.levelFiveCandidatePath = state.levelFiveSourceCandidate
+    ? [{ x: bucket.x, y: bucket.y }]
+    : [];
+  if (state.game.level === 5) state.levelFiveSourcePanelReleased = true;
   if (state.game.level === 8) {
     const candidateClipId = state.game.moves === 0 && bucket.id === 'magenta-top'
       ? 'first-magenta'
@@ -4704,6 +4921,16 @@ function onPointerMove(event) {
     return;
   }
   if (state.game.level === 11 && state.levelElevenSourceBucketId === bucket.id) {
+    state.lastPoint = point;
+    return;
+  }
+  if (state.levelFiveSourceCandidate) {
+    if (state.dragDistance >= 2) {
+      const next = clampBucketPosition(bucket, point.x - state.dragOffset.x, point.y - state.dragOffset.y);
+      bucket.x = next.x;
+      bucket.y = next.y;
+      state.levelFiveCandidatePath.push({ x: next.x, y: next.y });
+    }
     state.lastPoint = point;
     return;
   }
@@ -4793,6 +5020,7 @@ function restartCurrentLevel() {
   levelTwoSourceGameplayVideo.currentTime = 0;
   cancelLevelThreeSourcePlayback();
   cancelLevelFourSourcePlayback();
+  cancelLevelFiveSourcePlayback();
   cancelLevelEightSourcePlayback();
   cancelLevelElevenSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
@@ -4804,6 +5032,10 @@ function restartCurrentLevel() {
   state.levelTwoInteractive = false;
   state.levelFourSourcePanelReleased = false;
   state.levelFourSourceTimeline = null;
+  state.levelFiveSourceTimeline = null;
+  state.levelFiveSourcePanelReleased = false;
+  state.levelFiveSourceCandidate = false;
+  state.levelFiveCandidatePath = [];
   state.levelOneWonPending = false;
   state.game = createGameState(state.game.level);
   state.endDialogShown = false;
@@ -4827,6 +5059,7 @@ function advanceToNextLevel() {
   levelTwoSourceGameplayVideo.currentTime = 0;
   cancelLevelThreeSourcePlayback();
   cancelLevelFourSourcePlayback();
+  cancelLevelFiveSourcePlayback();
   cancelLevelEightSourcePlayback();
   cancelLevelElevenSourcePlayback();
   levelThirteenUfoReferenceVideo.pause();
@@ -4838,6 +5071,10 @@ function advanceToNextLevel() {
   state.levelTwoInteractive = false;
   state.levelFourSourcePanelReleased = false;
   state.levelFourSourceTimeline = null;
+  state.levelFiveSourceTimeline = null;
+  state.levelFiveSourcePanelReleased = false;
+  state.levelFiveSourceCandidate = false;
+  state.levelFiveCandidatePath = [];
   state.levelOneWonPending = false;
   state.game = startNextLevel(state.game);
   state.endDialogShown = false;
@@ -4878,6 +5115,12 @@ function advanceToNextLevel() {
     levelFourSourceGameplayVideo.load();
     levelFourSourceAudio.preload = 'auto';
     levelFourSourceAudio.load();
+  }
+  if (state.game.level === 5) {
+    levelFiveSourceGameplayVideo.preload = 'auto';
+    levelFiveSourceGameplayVideo.load();
+    levelFiveSourceAudio.preload = 'auto';
+    levelFiveSourceAudio.load();
   }
   state.hammerMode = false;
   state.ufoMode = false;
@@ -5143,6 +5386,26 @@ function onPointerUp(event) {
   event.preventDefault();
   const point = mapPointer(event);
   const bucket = getBucket(state.game, state.game.activeBucketId);
+  const levelFiveSourceDocked = state.game.level === 5
+    && state.levelFiveSourceCandidate
+    && bucket?.id === 'blue'
+    && state.dragDistance > 5
+    && Math.abs(bucket.x - 323) <= 18
+    && Math.abs(bucket.y - 597) <= 18;
+  let acceptedLevelFiveSource = levelFiveSourceDocked && beginLevelFiveSourcePlayback();
+  if (acceptedLevelFiveSource && bucket) {
+    state.moveCollected = Math.max(1, state.moveCollected);
+    bucket.x = 323;
+    bucket.y = 597;
+  } else if (state.levelFiveSourceCandidate && bucket) {
+    let from = state.levelFiveCandidatePath[0] ?? { x: state.dragOrigin.x, y: state.dragOrigin.y };
+    for (const to of state.levelFiveCandidatePath.slice(1)) {
+      const cells = collectAlongPath(state.game, bucket.id, from, to);
+      state.moveCollected += cells.length;
+      addCollectedEffects(cells, performance.now(), bucket);
+      from = to;
+    }
+  }
   const acceptedLevelEightSource = state.game.level === 8
     && bucket?.id === state.levelEightSourceBucketId
     && (state.levelEightSourceTimeline?.bucketId === bucket.id || state.levelEightSourcePanelHeld);
@@ -5206,6 +5469,8 @@ function onPointerUp(event) {
       } else {
         liveStatus.textContent = `已调整${colorName(bucket.color)}收集槽位置`;
       }
+    } else if (acceptedLevelFiveSource) {
+      liveStatus.textContent = '正在按原片路线收集七色像素';
     } else if (state.moveCollected === 0 && state.game.status !== 'won' && !acceptedLevelFourReposition) {
       bucket.x = state.dragOrigin.x;
       bucket.y = state.dragOrigin.y;
@@ -5227,6 +5492,8 @@ function onPointerUp(event) {
   state.dragDistance = 0;
   state.levelEightSourceCandidate = null;
   state.levelElevenSourceCandidate = null;
+  state.levelFiveSourceCandidate = false;
+  state.levelFiveCandidatePath = [];
   state.game.activeBucketId = null;
   if (state.game.level !== 2) state.game.moves += state.moveCollected > 0 ? 1 : 0;
   if (state.game.level === 2 && !state.levelTwoSourceTimeline) {
@@ -5268,7 +5535,7 @@ function setCanvasDensity() {
 function frame(now) {
   const delta = Math.min(0.05, Math.max(0, (now - state.lastFrameAt) / 1000));
   state.lastFrameAt = now;
-  const minimumLoadingMs = previewLevelOneAssetGate || previewLevelFourAssetGate ? 0 : loadingScreenDurationMs;
+  const minimumLoadingMs = previewLevelOneAssetGate || previewLevelFourAssetGate || previewLevelFiveAssetGate ? 0 : loadingScreenDurationMs;
   if (state.loading && !state.loadingPreview
       && now - state.loadingStartedAt >= minimumLoadingMs
       && initialPreviewAssetsReady()) {
